@@ -11,160 +11,158 @@ P-Ork's new `PorkGatewayWSExecutor` (service/src/executors/pork_gateway_ws.py) c
 to this gateway. The existing `OpenClawWSExecutor` is unchanged.
 
 ## Current build stage
-STAGE 2: Agent Loader + Session Manager
+STAGE 3: MCP Process Manager
 
-Stage 1 is COMPLETE. The gateway starts, generates identity, and handles WebSocket auth
-(token-only). Agent requests return "not implemented".
+Stages 1-2 are COMPLETE. The gateway starts, handles auth, loads agents, validates session
+keys, and returns stub LLMOutput responses for agent requests.
 
 ## Running the gateway
 uvicorn gateway.main:app --port 18789 --reload
 
-## Key files
-- gateway/main.py                — FastAPI app, WS endpoint, lifespan (DONE)
-- gateway/auth/device.py         — Identity generation and token auth (DONE)
-- gateway/agents/loader.py       — Agent YAML loader (BUILD THIS STAGE)
-- gateway/session/manager.py     — Session key registry (BUILD THIS STAGE)
-- gateway/models/config.py       — GatewayConfig Pydantic model (DONE)
-- gateway/models/agent.py        — AgentConfig Pydantic model (DONE)
-- config.yaml                    — Gateway configuration (DONE)
+## Key files (existing)
+- gateway/main.py                — FastAPI app, WS endpoint, lifespan, auth, agent handler
+- gateway/auth/device.py         — Identity generation and token auth
+- gateway/agents/loader.py       — Agent YAML + soul.md loader with SIGHUP reload
+- gateway/session/manager.py     — Session key registry with prefix validation
+- gateway/models/config.py       — GatewayConfig with limits and ENV_VAR resolution
+- gateway/models/agent.py        — AgentConfig Pydantic model
+- config.yaml                    — Gateway configuration
 - agents/                        — Agent definitions (sre-triage-sonnet exists)
 
-## STAGE 2 GOAL
-Gateway can load agent configs from YAML, validate them, and manage session isolation.
-Agent calls now return a stub response in the correct LLMOutput JSON format (instead of
-"not implemented").
+## Key files (BUILD THIS STAGE)
+- gateway/mcp/transport.py       — MCP stdio JSON-RPC transport
+- gateway/mcp/manager.py         — Spawns/monitors MCP child processes, tools/list, tools/call
 
-## STAGE 2 DELIVERABLES
+## STAGE 3 GOAL
+Gateway spawns and manages MCP server child processes, can list available tools from each,
+and routes tool calls to the right server. No LLM integration yet — just the MCP layer
+working in isolation.
 
-### 1. AgentConfig model (gateway/models/agent.py) — already exists, verify it matches:
+## STAGE 3 DELIVERABLES
 
+### 1. MCP stdio transport (gateway/mcp/transport.py)
+
+Wraps a subprocess with stdin/stdout pipes. Implements JSON-RPC 2.0 framing over stdio
+(newline-delimited JSON).
+
+Methods:
+- `async start()` — spawn subprocess, start background reader
+- `async initialize()` — send initialize request, receive response, send initialized notification
+  - initialize request params: `{"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "pork-gateway", "version": "0.1.0"}}`
+- `async send_request(method, params)` → awaitable response (matches by id)
+- `async send_notification(method, params)` → fire and forget (no id, no response)
+- `async call_tool(name, arguments)` → calls tools/call and returns result
+- `async list_tools()` → calls tools/list and returns tool definitions
+- `async stop()` — send SIGTERM, wait for exit, clean up
+- Background reader task draining stdout continuously, dispatching responses to waiting futures
+
+The transport must handle:
+- Newline-delimited JSON (each line is a complete JSON-RPC message)
+- Matching responses to requests by id
+- Timeout on requests (use config.limits.mcp_tool_timeout_seconds for tools/call, 10s for initialize)
+- Clean shutdown (stop reader task, close subprocess stdin, SIGTERM, wait)
+
+### 2. MCP manager (gateway/mcp/manager.py)
+
+Reads `mcp_servers` from config at startup. For each server config entry:
+- Spawn subprocess with `asyncio.create_subprocess_exec`
+- Resolve `${ENV_VAR}` in env blocks (same logic as config.py)
+- Initialize each server (call transport.initialize())
+- Call tools/list and cache tool definitions
+- Store MCPTool objects keyed by tool name with server_name attribute
+
+Methods:
+- `async start_all()` — spawn, initialize, and cache tools for all configured servers
+- `async stop_all()` — graceful shutdown of all servers
+- `get_tools_for_agent(agent: AgentConfig) -> list[MCPTool]` — filter global tools by agent's `tools:` list
+- `async call_tool(tool_name, arguments) -> MCPToolResult` — route to correct server, send tools/call
+- Health monitoring: restart crashed servers (simple restart, no backoff in Phase 1)
+  - Monitor subprocess return codes; if a server exits unexpectedly, log and restart
+  - On restart: re-initialize and re-cache tools
+- `get_server_status() -> dict` — return status of each server (name, running, pid, restart_count)
+
+Internal models:
 ```python
-class AgentConfig(BaseModel):
+class MCPTool(BaseModel):
     name: str
-    model: str
-    max_tokens: int = 8192
-    tools: list[str] = []
-    soul: str = ""  # loaded content of soul.md
+    description: str
+    input_schema: dict       # JSON Schema object (from MCP inputSchema)
+    server_name: str         # which MCP server owns this tool
+
+class MCPToolResult(BaseModel):
+    content: list[dict]      # MCP content blocks
+    is_error: bool = False
 ```
 
-### 2. Agent loader (gateway/agents/loader.py)
+### 3. Wire into lifespan (gateway/main.py)
 
-- Globs `agents/*/agent.yaml` from configured `agents_dir`
-- Reads `soul.md` from same directory (file must exist, fail validation if missing)
-- Validates via AgentConfig
-- Returns `dict[str, AgentConfig]` keyed by agent name
-- Agent name in YAML must match directory name — validation error if not
-- Hot-reload on SIGHUP (consistent with P-Ork's own reload pattern)
-- `POST /reload` endpoint also triggers agent reload
+Update the lifespan handler:
+- After loading agents, start MCP manager (start_all)
+- On shutdown: stop MCP manager (stop_all)
+- Log loaded tools at startup: number of tools per server
+- Add MCP manager to _state dict for use in WS handler and HTTP endpoints
 
-### 3. Session manager (gateway/session/manager.py)
+### 4. HTTP endpoints
 
-- Registry of active session keys → session state
-- Session state: `{session_key, agent_name, messages: list, created_at}`
-- Session key validation: must start with `agent:{agentId}:` — reject with error if not
-  Only validate the PREFIX. Everything after `agent:{agentId}:` is free-form.
-  Example valid key: `agent:sre-triage-sonnet:pipeline:run-123:triage`
-  Example invalid key: `agent:wrong-agent:some-run:triage` (agent name doesn't match)
-- Session isolation: each unique session key gets its own message history
-- Sessions are in-memory (no persistence needed in Phase 1)
-- `get_or_create(session_key, agent_name)` method — returns existing session or creates new
-
-### 4. Agent handler update (gateway/main.py)
-
-Update the `agent` method handler in the WS endpoint:
-
-- Look up agent by `agentId` from params — return error if agent not found:
-  `{"ok": false, "error": {"message": "agent not found: {agentId}"}}`
-- Validate session key format — return error if prefix doesn't match:
-  ```python
-  expected_prefix = f"agent:{agent_id}:"
-  if not session_key.startswith(expected_prefix):
-      return {"ok": false, "error": {"message": f"sessionKey must start with '{expected_prefix}', got: {session_key}"}}
-  ```
-- Return stub LLMOutput-shaped JSON wrapped in the correct two-frame protocol:
-  
-  Frame 1 (immediately):
-  ```json
-  {"type": "res", "id": "<same-uuid>", "ok": true, "payload": {"status": "accepted", "runId": "<uuid>"}}
-  ```
-  
-  Frame 2 (after short processing):
+- `GET /mcp/tools` — returns all loaded tool definitions grouped by server:
   ```json
   {
-    "type": "res",
-    "id": "<same-uuid>",
-    "ok": true,
-    "payload": {
-      "status": "ok",
-      "result": {
-        "payloads": [{"text": "{\"confidence\": 1.0, \"summary\": \"stub response from gateway\", \"next_step_context\": \"\", \"proceed\": true}", "mediaUrl": null}],
-        "meta": {
-          "durationMs": 1,
-          "agentMeta": {
-            "provider": "stub",
-            "model": "<agent.model>",
-            "usage": {"input_tokens": 0, "output_tokens": 0}
-          },
-          "aborted": false
-        }
-      }
-    }
+    "filesystem": [
+      {"name": "read_file", "description": "...", "inputSchema": {...}},
+      {"name": "write_file", "description": "...", "inputSchema": {...}}
+    ]
+  }
+  ```
+- `GET /mcp/servers` — return server status (name, running, pid, restart_count):
+  ```json
+  {
+    "filesystem": {"running": true, "pid": 12345, "restart_count": 0}
   }
   ```
 
-  CRITICAL: Both frames MUST use the same request ID from the agent request.
-  P-Ork's executor loops waiting for the second frame with matching ID.
+### 5. Tool name collision handling
 
-### 5. Health endpoints
+If two MCP servers expose a tool with the same name, the gateway must disambiguate.
+Strategy: last-registered wins, with a startup warning logged. Tool names are scoped to
+a specific server in the internal registry.
 
-- `GET /agents` — returns list of loaded agent names and their models:
-  ```json
-  {"agents": [{"name": "sre-triage-sonnet", "model": "anthropic/claude-sonnet-4-6"}]}
-  ```
-- `POST /reload` — reloads agent configs from disk, returns updated agent list
+### 6. Config for testing
 
-### 6. Wire into lifespan
+The config.yaml already has a filesystem MCP server entry. For testing, you may want to
+adjust the path argument from `/home/user` to a local temp directory, e.g.:
+```yaml
+mcp_servers:
+  filesystem:
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp/pork-gw-test"]
+```
 
-Update the lifespan handler in main.py to:
-- Load agents on startup (call the agent loader)
-- Log loaded agents at startup
-- On SIGHUP: reload agents
-
-## Auth (Phase 1: token-only)
-The gateway validates the operator token from params.auth.token on connect.
-Token is stored in device-auth.json (loaded at startup).
-The challenge/nonce flow is performed but nonce is NOT verified in Phase 1.
-Full Ed25519 signature verification is added in Stage 5.
-
-## WS Protocol (critical)
-The agent method sends TWO res frames with the same id:
-  1. `{"status": "accepted", "runId": "..."}` — sent immediately, before agent runs
-  2. `{"status": "ok", "result": {...}}` — sent after agent completes
-P-Ork's executor loops waiting for the second frame. Both MUST use the original request id.
-
-## Session key validation
-Validate that sessionKey starts with `agent:{agentId}:` — PREFIX ONLY.
-Everything after that third colon is free-form. Do NOT attempt to parse or validate the suffix.
-Reject with a clear error if the prefix is wrong so the P-Ork step fails with a legible message.
+## MCP protocol notes
+- MCP uses JSON-RPC 2.0 over stdio with newline-delimited messages
+- initialize request params: `{"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "pork-gateway", "version": "0.1.0"}}`
+- tools/list response: `{"tools": [{"name": "...", "description": "...", "inputSchema": {...}}]}`
+- tools/call request params: `{"name": "tool_name", "arguments": {...}}`
+- tools/call response: `{"content": [{"type": "text", "text": "..."}], "isError": false}`
 
 ## Runtime limits (from config.yaml limits block)
-- max_agent_iterations: 20    — LLM ↔ tool call loop cap
-- request_timeout_seconds: 180 — single LLM API call timeout
-- mcp_tool_timeout_seconds: 30 — per MCP tool call timeout
+- max_agent_iterations: 20    — LLM ↔ tool call loop cap (not used yet)
+- request_timeout_seconds: 180 — single LLM API call timeout (not used yet)
+- mcp_tool_timeout_seconds: 30 — per MCP tool call timeout (USED THIS STAGE)
 
 ## Known issues
-- MCP servers do not hot-reload — adding a new MCP server requires restart (not relevant yet)
+- MCP servers do not hot-reload — adding a new MCP server requires restart
 - OpenRouter uses non-streaming POST only — SSE deferred until P-Ork needs it
 - Ed25519 signature verification not active until Stage 5
 - Sessions are in-memory — gateway restart clears all session history (intentional)
 
 ## Test milestone
 After building, verify:
-1. Create a test agent: `mkdir -p agents/test-agent && echo 'name: test-agent\nmodel: anthropic/claude-haiku-4-5-20251001\ntools: []' > agents/test-agent/agent.yaml && echo "You are a test agent." > agents/test-agent/soul.md`
-2. Start gateway — should log loaded agents
-3. `GET /agents` — returns list of agents with models
-4. WS: agent request with valid agent → stub LLMOutput response (two frames: accepted then ok)
-5. WS: agent request with invalid agent → "agent not found" error
-6. WS: agent request with wrong session key prefix → "sessionKey must start with..." error
-7. `POST /reload` — reloads agents, returns updated list
-8. SIGHUP — reloads agents (check logs)
+1. Start gateway with filesystem MCP server configured
+2. Check startup logs show MCP initialisation handshake and tool caching
+3. Hit `GET /mcp/tools` — should return tool list from filesystem server (read_file, write_file, etc.)
+4. Hit `GET /mcp/servers` — should show filesystem server as running with pid
+5. Write a quick test that calls `manager.call_tool("read_file", {"path": "/tmp/pork-gw-test/test.txt"})`
+   after creating that file, and verify the content comes back
+6. Kill the filesystem MCP server process — verify manager detects crash, restarts, and
+   next call_tool still works
+7. Hit `GET /mcp/tools` after restart — tools still available
