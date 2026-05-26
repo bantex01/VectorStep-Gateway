@@ -17,7 +17,7 @@ limits:
 mcp_servers:
   filesystem:
     command: npx
-    args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp/pork-gw-test"]
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/private/tmp"]
   grafana:
     command: npx
     args: ["-y", "@grafana/mcp-grafana"]

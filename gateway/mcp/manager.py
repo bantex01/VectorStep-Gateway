@@ -96,10 +96,11 @@ class MCPManager:
     def get_tools_for_agent(self, agent: AgentConfig) -> list[MCPTool]:
         if not agent.tools:
             return []
+        # agent.tools contains MCP server names, not individual tool names
+        server_names = set(agent.tools)
         return [
-            self._tools[name]
-            for name in agent.tools
-            if name in self._tools
+            tool for tool in self._tools.values()
+            if tool.server_name in server_names
         ]
 
     async def call_tool(self, tool_name: str, arguments: dict) -> MCPToolResult:
