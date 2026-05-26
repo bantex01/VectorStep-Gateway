@@ -10,9 +10,11 @@ from fastapi.responses import JSONResponse
 
 from gateway.agents.loader import install_sighup_handler, load_agents
 from gateway.auth.device import bootstrap_identity, get_operator_token
+from gateway.llm.router import LLMRouter
 from gateway.mcp.manager import MCPManager
 from gateway.models.agent import AgentConfig
 from gateway.models.config import GatewayConfig, load_config
+from gateway.runner.agent_runner import AgentRunError, AgentRunner
 from gateway.session.manager import SessionManager
 
 _state: dict = {}
@@ -37,11 +39,15 @@ async def lifespan(app: FastAPI):
     mcp_manager = MCPManager(config)
     await mcp_manager.start_all()
 
+    llm_router = LLMRouter(config)
+    agent_runner = AgentRunner(llm_router)
+
     _state["config"] = config
     _state["operator_token"] = operator_token
     _state["agents"] = agents
     _state["session_manager"] = session_manager
     _state["mcp_manager"] = mcp_manager
+    _state["agent_runner"] = agent_runner
 
     def _reload():
         new_agents = load_agents(config.agents_dir)
@@ -173,7 +179,7 @@ async def rpc(ws: WebSocket):
                 session_manager.get_or_create(session_key, agent_id)
                 run_id = str(uuid.uuid4())
 
-                # Frame 1: accepted
+                # Frame 1: accepted — sent immediately before the runner starts
                 await ws.send_json({
                     "type": "res",
                     "id": msg_id,
@@ -181,34 +187,73 @@ async def rpc(ws: WebSocket):
                     "payload": {"status": "accepted", "runId": run_id},
                 })
 
-                await asyncio.sleep(0.05)
+                runner: AgentRunner = _state["agent_runner"]
+                mcp_manager: MCPManager = _state["mcp_manager"]
+                config: GatewayConfig = _state["config"]
 
-                # Frame 2: stub LLMOutput result
-                await ws.send_json({
-                    "type": "res",
-                    "id": msg_id,
-                    "ok": True,
-                    "payload": {
-                        "status": "ok",
-                        "result": {
-                            "payloads": [
-                                {
-                                    "text": '{"confidence": 1.0, "summary": "stub response from gateway", "next_step_context": "", "proceed": true}',
-                                    "mediaUrl": None,
-                                }
-                            ],
-                            "meta": {
-                                "durationMs": 1,
-                                "agentMeta": {
-                                    "provider": "stub",
-                                    "model": agent.model,
-                                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                message_text = params.get("message", "")
+                model_override = params.get("model") or None
+                thinking_level = params.get("thinkingLevel") or None
+
+                try:
+                    result = await runner.run(
+                        agent=agent,
+                        session_key=session_key,
+                        message=message_text,
+                        model_override=model_override,
+                        thinking_level=thinking_level,
+                        mcp_manager=mcp_manager,
+                        limits=config.limits,
+                    )
+
+                    # Derive provider name from the model string used
+                    effective_model = model_override or agent.model
+                    if effective_model.startswith("openrouter/"):
+                        provider_name = "openrouter"
+                    else:
+                        provider_name = "anthropic"
+
+                    # Frame 2: ok with real result
+                    await ws.send_json({
+                        "type": "res",
+                        "id": msg_id,
+                        "ok": True,
+                        "payload": {
+                            "status": "ok",
+                            "result": {
+                                "payloads": [
+                                    {"text": result.text, "mediaUrl": None}
+                                ],
+                                "meta": {
+                                    "durationMs": result.duration_ms,
+                                    "agentMeta": {
+                                        "provider": provider_name,
+                                        "model": result.model_used,
+                                        "usage": result.usage,
+                                    },
+                                    "aborted": False,
                                 },
-                                "aborted": False,
                             },
                         },
-                    },
-                })
+                    })
+
+                except AgentRunError as exc:
+                    await ws.send_json({
+                        "type": "res",
+                        "id": msg_id,
+                        "ok": False,
+                        "error": {"message": str(exc)},
+                    })
+                except Exception as exc:
+                    logging.getLogger(__name__).exception(
+                        "Unexpected error running agent %s", agent_id
+                    )
+                    await ws.send_json({
+                        "type": "res",
+                        "id": msg_id,
+                        "ok": False,
+                        "error": {"message": f"internal error: {exc}"},
+                    })
 
             else:
                 await ws.send_json({

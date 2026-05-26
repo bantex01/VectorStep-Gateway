@@ -1,1 +1,75 @@
-# TODO: Stage 4 — translate MCP tool schemas to provider-specific formats
+import json
+
+from gateway.mcp.manager import MCPTool, MCPToolResult
+
+
+def mcp_to_anthropic(tools: list[MCPTool]) -> list[dict]:
+    return [
+        {
+            "name": tool.name,
+            "description": tool.description,
+            "input_schema": tool.input_schema,
+        }
+        for tool in tools
+    ]
+
+
+def mcp_to_openrouter(tools: list[MCPTool]) -> list[dict]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.input_schema,
+            },
+        }
+        for tool in tools
+    ]
+
+
+def anthropic_tool_use_to_mcp(block: dict) -> tuple[str, dict]:
+    """Extract (tool_name, arguments) from a normalised Anthropic tool_use block."""
+    return block["name"], block["input"]
+
+
+def openrouter_tool_call_to_mcp(block: dict) -> tuple[str, dict]:
+    """Extract (tool_name, arguments) from a normalised OpenRouter tool_use block.
+
+    Both providers normalise to the same dict shape so this mirrors the Anthropic extractor.
+    """
+    return block["name"], block["input"]
+
+
+def mcp_result_to_anthropic(tool_use_id: str, result: MCPToolResult) -> dict:
+    if result.is_error:
+        content = [{"type": "text", "text": _extract_text(result.content)}]
+    else:
+        content = result.content
+    return {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": content,
+        "is_error": result.is_error,
+    }
+
+
+def mcp_result_to_openrouter(tool_call_id: str, result: MCPToolResult) -> dict:
+    if result.is_error:
+        content = _extract_text(result.content)
+    else:
+        content = json.dumps(result.content)
+    return {
+        "role": "tool",
+        "tool_call_id": tool_call_id,
+        "content": content,
+    }
+
+
+def _extract_text(content: list[dict]) -> str:
+    parts = [
+        block.get("text", "")
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    ]
+    return "\n".join(parts) if parts else str(content)
