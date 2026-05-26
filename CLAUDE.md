@@ -11,144 +11,33 @@ P-Ork's new `PorkGatewayWSExecutor` (service/src/executors/pork_gateway_ws.py) c
 to this gateway. The existing `OpenClawWSExecutor` is unchanged.
 
 ## Current build stage
-STAGE 1: Project Skeleton + Token Auth
+STAGE 2: Agent Loader + Session Manager
+
+Stage 1 is COMPLETE. The gateway starts, generates identity, and handles WebSocket auth
+(token-only). Agent requests return "not implemented".
 
 ## Running the gateway
 uvicorn gateway.main:app --port 18789 --reload
 
-## Key files (all to be created in this stage)
-- gateway/main.py                — FastAPI app, WS endpoint, lifespan
-- gateway/auth/device.py         — Identity generation and token auth validation
-- gateway/models/config.py       — GatewayConfig, LimitsConfig, etc. Pydantic models
-- gateway/models/agent.py        — AgentConfig Pydantic model (stub for now)
-- config.yaml                    — Gateway configuration (already exists)
-- agents/                        — Agent definitions (already exists with sample agent)
+## Key files
+- gateway/main.py                — FastAPI app, WS endpoint, lifespan (DONE)
+- gateway/auth/device.py         — Identity generation and token auth (DONE)
+- gateway/agents/loader.py       — Agent YAML loader (BUILD THIS STAGE)
+- gateway/session/manager.py     — Session key registry (BUILD THIS STAGE)
+- gateway/models/config.py       — GatewayConfig Pydantic model (DONE)
+- gateway/models/agent.py        — AgentConfig Pydantic model (DONE)
+- config.yaml                    — Gateway configuration (DONE)
+- agents/                        — Agent definitions (sre-triage-sonnet exists)
 
-## STAGE 1 GOAL
-A running WebSocket server that completes the auth handshake using token-only validation
-and rejects invalid tokens. The challenge/nonce flow is performed (because
-PorkGatewayWSExecutor sends it) but nonce verification is skipped. Agent calls return a
-"not implemented" error. 
+## STAGE 2 GOAL
+Gateway can load agent configs from YAML, validate them, and manage session isolation.
+Agent calls now return a stub response in the correct LLMOutput JSON format (instead of
+"not implemented").
 
-## STAGE 1 DELIVERABLES
+## STAGE 2 DELIVERABLES
 
-### 1. Config loading (gateway/models/config.py)
+### 1. AgentConfig model (gateway/models/agent.py) — already exists, verify it matches:
 
-Load config.yaml with ${ENV_VAR} resolution. All fields must be typed Pydantic models:
-
-```python
-class LimitsConfig(BaseModel):
-    max_agent_iterations: int = 20
-    request_timeout_seconds: int = 180
-    mcp_tool_timeout_seconds: int = 30
-
-class ServerConfig(BaseModel):
-    host: str = "0.0.0.0"
-    port: int = 18789
-
-class IdentityConfig(BaseModel):
-    path: str = "~/.pork-gateway/identity"
-
-class MCPServerConfig(BaseModel):
-    command: str
-    args: list[str] = []
-    env: dict[str, str] = {}
-
-class ProviderConfig(BaseModel):
-    api_key: str = ""
-    base_url: str | None = None
-
-class ProvidersConfig(BaseModel):
-    anthropic: ProviderConfig = ProviderConfig()
-    openrouter: ProviderConfig = ProviderConfig()
-
-class LoggingConfig(BaseModel):
-    level: str = "INFO"
-
-class GatewayConfig(BaseModel):
-    server: ServerConfig
-    agents_dir: str = "./agents"
-    identity: IdentityConfig
-    limits: LimitsConfig = LimitsConfig()
-    mcp_servers: dict[str, MCPServerConfig] = {}
-    providers: ProvidersConfig
-    logging: LoggingConfig = LoggingConfig()
-```
-
-ENV_VAR resolution: scan all string values for `${VAR_NAME}` patterns and replace with
-os.environ.get("VAR_NAME", ""). Do this recursively on the raw YAML dict before passing
-to Pydantic.
-
-### 2. Identity generation (gateway/auth/device.py)
-
-On first run, if no identity files exist at config.identity.path:
-
-- Generate a UUID device ID
-- Generate a UUID operator token
-- Write `device.json`: `{"deviceId": "<uuid>", "privateKeyPem": ""}`
-  (PEM field present but empty — populated in Stage 5)
-- Write `device-auth.json`: 
-  `{"tokens": {"operator": {"token": "<uuid>", "scopes": ["agent:invoke", "gateway:connect"]}}}`
-- Both written to the configured identity path directory (create dir if needed)
-- Print first-run bootstrap message:
-  ```
-  [pork-gateway] First run — generated device identity.
-  [pork-gateway] Written to: <path>/device.json
-  [pork-gateway] Written to: <path>/device-auth.json
-  [pork-gateway] Add the following to your P-Ork config.yaml:
-  [pork-gateway]   executors:
-  [pork-gateway]     pork_gateway:
-  [pork-gateway]       url: ws://localhost:18789/rpc
-  [pork-gateway]       identity_dir: <path>
-  [pork-gateway] Then use executor: pork_gateway in your pipeline YAML steps.
-  ```
-- Identity dir configurable via PORK_GATEWAY_IDENTITY_DIR env var (overrides config)
-
-On subsequent runs: load existing device.json and device-auth.json.
-
-### 3. WebSocket endpoint (gateway/main.py)
-
-FastAPI app with lifespan handler that:
-1. Loads config.yaml
-2. Generates/loads identity
-3. Sets up logging
-
-WebSocket endpoint at `/rpc`:
-
-**On connect:**
-- Send challenge event immediately:
-  ```json
-  {"type": "event", "event": "challenge", "payload": {"nonce": "<random-string>"}}
-  ```
-
-**Handle connect request:**
-- Validate `params.auth.token` against loaded operator token
-- If valid: return `{"type": "res", "id": "<same-uuid>", "ok": true, "payload": {"protocol": 3}}`
-- If invalid: return `{"type": "res", "id": "<same-uuid>", "ok": false, "error": {"message": "invalid operator token"}}`
-
-**Handle agent request (after auth):**
-- Return `{"type": "res", "id": "<same-uuid>", "ok": false, "error": {"message": "not implemented"}}`
-
-**All other methods:**
-- Return `{"type": "res", "id": "<same-uuid>", "ok": false, "error": {"message": "unknown method: <method>"}}`
-
-### 4. Stub files
-
-Create minimal stubs for files that will be populated in later stages:
-- gateway/agents/loader.py — empty or with a TODO comment
-- gateway/mcp/manager.py — empty or with a TODO comment
-- gateway/mcp/transport.py — empty or with a TODO comment
-- gateway/llm/router.py — empty or with a TODO comment
-- gateway/llm/tool_translator.py — empty or with a TODO comment
-- gateway/llm/providers/anthropic.py — empty or with a TODO comment
-- gateway/llm/providers/openrouter.py — empty or with a TODO comment
-- gateway/runner/agent_runner.py — empty or with a TODO comment
-- gateway/session/manager.py — empty or with a TODO comment
-- gateway/models/agent.py — AgentConfig Pydantic model (define the schema even though it's not used yet)
-
-### 5. AgentConfig model (gateway/models/agent.py)
-
-Define the schema even though Stage 1 doesn't use it:
 ```python
 class AgentConfig(BaseModel):
     name: str
@@ -158,18 +47,88 @@ class AgentConfig(BaseModel):
     soul: str = ""  # loaded content of soul.md
 ```
 
-## WS Protocol details (critical)
+### 2. Agent loader (gateway/agents/loader.py)
 
-Message format:
-- Client → Server: `{"type": "req", "id": "<uuid>", "method": "<method>", "params": {...}}`
-- Server → Client: `{"type": "res", "id": "<uuid>", "ok": true/false, "payload": {...}}`
-- Server → Client: `{"type": "event", "event": "<name>", "payload": {...}}`
+- Globs `agents/*/agent.yaml` from configured `agents_dir`
+- Reads `soul.md` from same directory (file must exist, fail validation if missing)
+- Validates via AgentConfig
+- Returns `dict[str, AgentConfig]` keyed by agent name
+- Agent name in YAML must match directory name — validation error if not
+- Hot-reload on SIGHUP (consistent with P-Ork's own reload pattern)
+- `POST /reload` endpoint also triggers agent reload
 
-The `id` field in every response MUST match the `id` from the request. This is critical —
-P-Ork's executor matches responses by id.
+### 3. Session manager (gateway/session/manager.py)
 
-The connect request includes device fields (publicKey, signature, signedAt, nonce) but
-these are IGNORED in Phase 1 — only auth.token is validated.
+- Registry of active session keys → session state
+- Session state: `{session_key, agent_name, messages: list, created_at}`
+- Session key validation: must start with `agent:{agentId}:` — reject with error if not
+  Only validate the PREFIX. Everything after `agent:{agentId}:` is free-form.
+  Example valid key: `agent:sre-triage-sonnet:pipeline:run-123:triage`
+  Example invalid key: `agent:wrong-agent:some-run:triage` (agent name doesn't match)
+- Session isolation: each unique session key gets its own message history
+- Sessions are in-memory (no persistence needed in Phase 1)
+- `get_or_create(session_key, agent_name)` method — returns existing session or creates new
+
+### 4. Agent handler update (gateway/main.py)
+
+Update the `agent` method handler in the WS endpoint:
+
+- Look up agent by `agentId` from params — return error if agent not found:
+  `{"ok": false, "error": {"message": "agent not found: {agentId}"}}`
+- Validate session key format — return error if prefix doesn't match:
+  ```python
+  expected_prefix = f"agent:{agent_id}:"
+  if not session_key.startswith(expected_prefix):
+      return {"ok": false, "error": {"message": f"sessionKey must start with '{expected_prefix}', got: {session_key}"}}
+  ```
+- Return stub LLMOutput-shaped JSON wrapped in the correct two-frame protocol:
+  
+  Frame 1 (immediately):
+  ```json
+  {"type": "res", "id": "<same-uuid>", "ok": true, "payload": {"status": "accepted", "runId": "<uuid>"}}
+  ```
+  
+  Frame 2 (after short processing):
+  ```json
+  {
+    "type": "res",
+    "id": "<same-uuid>",
+    "ok": true,
+    "payload": {
+      "status": "ok",
+      "result": {
+        "payloads": [{"text": "{\"confidence\": 1.0, \"summary\": \"stub response from gateway\", \"next_step_context\": \"\", \"proceed\": true}", "mediaUrl": null}],
+        "meta": {
+          "durationMs": 1,
+          "agentMeta": {
+            "provider": "stub",
+            "model": "<agent.model>",
+            "usage": {"input_tokens": 0, "output_tokens": 0}
+          },
+          "aborted": false
+        }
+      }
+    }
+  }
+  ```
+
+  CRITICAL: Both frames MUST use the same request ID from the agent request.
+  P-Ork's executor loops waiting for the second frame with matching ID.
+
+### 5. Health endpoints
+
+- `GET /agents` — returns list of loaded agent names and their models:
+  ```json
+  {"agents": [{"name": "sre-triage-sonnet", "model": "anthropic/claude-sonnet-4-6"}]}
+  ```
+- `POST /reload` — reloads agent configs from disk, returns updated agent list
+
+### 6. Wire into lifespan
+
+Update the lifespan handler in main.py to:
+- Load agents on startup (call the agent loader)
+- Log loaded agents at startup
+- On SIGHUP: reload agents
 
 ## Auth (Phase 1: token-only)
 The gateway validates the operator token from params.auth.token on connect.
@@ -177,27 +136,35 @@ Token is stored in device-auth.json (loaded at startup).
 The challenge/nonce flow is performed but nonce is NOT verified in Phase 1.
 Full Ed25519 signature verification is added in Stage 5.
 
-## Test milestone
-After building, verify:
-1. `uvicorn gateway.main:app --port 18789` starts without error
-2. First-run generates identity files and prints bootstrap message
-3. WS client connects, receives challenge event
-4. Valid token → auth accepted
-5. Invalid token → auth rejected
-6. Agent request → "not implemented" error
-7. Unknown method → "unknown method" error
+## WS Protocol (critical)
+The agent method sends TWO res frames with the same id:
+  1. `{"status": "accepted", "runId": "..."}` — sent immediately, before agent runs
+  2. `{"status": "ok", "result": {...}}` — sent after agent completes
+P-Ork's executor loops waiting for the second frame. Both MUST use the original request id.
 
-## Dependencies (Stage 1 only)
-fastapi>=0.110.0
-uvicorn[standard]>=0.29.0
-websockets>=12.0
-pydantic>=2.0
-pyyaml>=6.0
+## Session key validation
+Validate that sessionKey starts with `agent:{agentId}:` — PREFIX ONLY.
+Everything after that third colon is free-form. Do NOT attempt to parse or validate the suffix.
+Reject with a clear error if the prefix is wrong so the P-Ork step fails with a legible message.
 
-Note: cryptography NOT needed until Stage 5. anthropic and httpx NOT needed until Stage 4.
+## Runtime limits (from config.yaml limits block)
+- max_agent_iterations: 20    — LLM ↔ tool call loop cap
+- request_timeout_seconds: 180 — single LLM API call timeout
+- mcp_tool_timeout_seconds: 30 — per MCP tool call timeout
 
 ## Known issues
-- Ed25519 signature verification not active until Stage 5
 - MCP servers do not hot-reload — adding a new MCP server requires restart (not relevant yet)
-- Sessions are in-memory — gateway restart clears all session history (intentional, not relevant yet)
-- No streaming events in Phase 1
+- OpenRouter uses non-streaming POST only — SSE deferred until P-Ork needs it
+- Ed25519 signature verification not active until Stage 5
+- Sessions are in-memory — gateway restart clears all session history (intentional)
+
+## Test milestone
+After building, verify:
+1. Create a test agent: `mkdir -p agents/test-agent && echo 'name: test-agent\nmodel: anthropic/claude-haiku-4-5-20251001\ntools: []' > agents/test-agent/agent.yaml && echo "You are a test agent." > agents/test-agent/soul.md`
+2. Start gateway — should log loaded agents
+3. `GET /agents` — returns list of agents with models
+4. WS: agent request with valid agent → stub LLMOutput response (two frames: accepted then ok)
+5. WS: agent request with invalid agent → "agent not found" error
+6. WS: agent request with wrong session key prefix → "sessionKey must start with..." error
+7. `POST /reload` — reloads agents, returns updated list
+8. SIGHUP — reloads agents (check logs)
