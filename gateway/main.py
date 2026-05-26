@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from gateway.agents.loader import install_sighup_handler, load_agents
 from gateway.auth.device import bootstrap_identity, get_operator_token
+from gateway.mcp.manager import MCPManager
 from gateway.models.agent import AgentConfig
 from gateway.models.config import GatewayConfig, load_config
 from gateway.session.manager import SessionManager
@@ -33,10 +34,14 @@ async def lifespan(app: FastAPI):
     agents = load_agents(config.agents_dir)
     session_manager = SessionManager()
 
+    mcp_manager = MCPManager(config)
+    await mcp_manager.start_all()
+
     _state["config"] = config
     _state["operator_token"] = operator_token
     _state["agents"] = agents
     _state["session_manager"] = session_manager
+    _state["mcp_manager"] = mcp_manager
 
     def _reload():
         new_agents = load_agents(config.agents_dir)
@@ -56,6 +61,8 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    await mcp_manager.stop_all()
+
 
 app = FastAPI(lifespan=lifespan)
 
@@ -71,6 +78,18 @@ async def reload_agents():
     _state["reload_fn"]()
     agents: dict[str, AgentConfig] = _state["agents"]
     return {"agents": [{"name": a.name, "model": a.model} for a in agents.values()]}
+
+
+@app.get("/mcp/tools")
+async def mcp_tools():
+    manager: MCPManager = _state["mcp_manager"]
+    return manager.get_all_tools()
+
+
+@app.get("/mcp/servers")
+async def mcp_servers():
+    manager: MCPManager = _state["mcp_manager"]
+    return manager.get_server_status()
 
 
 @app.websocket("/rpc")
