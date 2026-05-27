@@ -9,12 +9,18 @@ A Python/FastAPI WebSocket gateway that runs AI agents with MCP tools, replacing
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 
-# Set required environment variables
+# Set required environment variables (at least one LLM provider)
 export ANTHROPIC_API_KEY=sk-ant-...     # for Anthropic provider
-export PORK_GATEWAY_TOKEN=your-token    # for P-Ork → gateway auth
+# export OPENROUTER_API_KEY=...        # for OpenRouter
+# export OLLAMA_API_KEY=...             # for Ollama cloud
+# export GOOGLE_API_KEY=...             # for Google Gemini
 
 # Start the gateway
 .venv/bin/uvicorn gateway.main:app --port 18789
+
+# The auth token is auto-generated on first run.
+# Find it in ~/.pork-gateway/identity/device-auth.json
+# Use the 'operator' token value for P-Ork's executors.gateway.token config.
 ```
 
 The gateway auto-generates an identity (device key + operator token) on first run. The operator token is stored in `~/.pork-gateway/identity/device-auth.json`.
