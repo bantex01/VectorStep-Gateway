@@ -66,6 +66,15 @@ def mcp_result_to_openrouter(tool_call_id: str, result: MCPToolResult) -> dict:
     }
 
 
+# Ollama and Google use the same OpenAI-compat format as OpenRouter
+mcp_to_ollama = mcp_to_openrouter
+mcp_to_google = mcp_to_openrouter
+ollama_tool_call_to_mcp = openrouter_tool_call_to_mcp
+google_tool_call_to_mcp = openrouter_tool_call_to_mcp
+mcp_result_to_ollama = mcp_result_to_openrouter
+mcp_result_to_google = mcp_result_to_openrouter
+
+
 def _extract_text(content: list[dict]) -> str:
     parts = [
         block.get("text", "")

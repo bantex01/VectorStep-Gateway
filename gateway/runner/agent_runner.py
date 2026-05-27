@@ -52,13 +52,13 @@ class AgentRunner:
 
         model_string = model_override or agent.model
         provider, model_name = self._router.get_provider_and_model(model_string)
-        is_openrouter = model_string.startswith("openrouter/")
+        is_openai_compat = model_string.startswith(("openrouter/", "ollama/", "google/"))
 
         # Resolve tools for this agent and translate to provider format
         mcp_tools = mcp_manager.get_tools_for_agent(agent)
         if mcp_tools:
             translated_tools = (
-                mcp_to_openrouter(mcp_tools) if is_openrouter else mcp_to_anthropic(mcp_tools)
+                mcp_to_openrouter(mcp_tools) if is_openai_compat else mcp_to_anthropic(mcp_tools)
             )
         else:
             translated_tools = None
@@ -117,7 +117,7 @@ class AgentRunner:
                 )
 
             # ── Append assistant message ───────────────────────────────
-            if is_openrouter:
+            if is_openai_compat:
                 text_content = "\n".join(
                     b["text"]
                     for b in response.content_blocks
@@ -187,14 +187,14 @@ class AgentRunner:
                     )
                     logger.warning("Tool '%s' error: %s", tool_name, exc)
 
-                if is_openrouter:
+                if is_openai_compat:
                     tool_results.append(mcp_result_to_openrouter(tool_use_id, result))
                 else:
                     tool_results.append(mcp_result_to_anthropic(tool_use_id, result))
 
             # Append tool results (Anthropic: batched in one user message;
             # OpenRouter: individual tool messages)
-            if is_openrouter:
+            if is_openai_compat:
                 messages.extend(tool_results)
             else:
                 messages.append({"role": "user", "content": tool_results})

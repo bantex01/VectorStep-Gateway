@@ -5,11 +5,11 @@ A Python/FastAPI WebSocket gateway that is an optional alternative to OpenClaw a
 agent execution backend for P-Ork (https://github.com/bantex01/P-Ork).
 
 ## Current build stage
-STAGE 4: LLM Executor + Tool Translation
+STAGE 5: Ollama + Google Providers
 
-Stages 1-3 are COMPLETE. The gateway starts, handles auth, loads agents, manages sessions,
-spawns MCP servers, caches tools, and routes tool calls. Agent requests still return stub
-responses — this stage replaces stubs with real LLM calls.
+Stages 1-4 are COMPLETE. The gateway starts, handles auth, loads agents, manages sessions,
+spawns MCP servers, caches tools, routes tool calls, and runs a full agentic loop with real
+LLM calls via Anthropic and OpenRouter. Stage 5 adds Ollama and Google as additional providers.
 
 ## Running the gateway
 uvicorn gateway.main:app --port 18789 --reload

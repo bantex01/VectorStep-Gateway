@@ -4,6 +4,8 @@ import logging
 
 from gateway.llm.providers.anthropic import AnthropicProvider
 from gateway.llm.providers.base import BaseProvider
+from gateway.llm.providers.google import GoogleProvider
+from gateway.llm.providers.ollama import OllamaProvider
 from gateway.llm.providers.openrouter import OpenRouterProvider
 from gateway.models.config import GatewayConfig
 
@@ -29,6 +31,10 @@ class LLMRouter:
             return self._openrouter(), model_string[len("openrouter/"):]
         if model_string.startswith("anthropic/"):
             return self._anthropic(), model_string[len("anthropic/"):]
+        if model_string.startswith("ollama/"):
+            return self._ollama(), model_string[len("ollama/"):]
+        if model_string.startswith("google/"):
+            return self._google(), model_string[len("google/"):]
         return self._anthropic(), model_string
 
     # ------------------------------------------------------------------
@@ -49,3 +55,23 @@ class LLMRouter:
                 timeout=float(self._config.limits.request_timeout_seconds),
             )
         return self._providers["openrouter"]  # type: ignore[return-value]
+
+    def _ollama(self) -> OllamaProvider:
+        if "ollama" not in self._providers:
+            cfg = self._config.providers.ollama
+            self._providers["ollama"] = OllamaProvider(
+                base_url=cfg.base_url or "http://localhost:11434/v1",
+                api_key=cfg.api_key,
+                timeout=float(self._config.limits.request_timeout_seconds),
+            )
+        return self._providers["ollama"]  # type: ignore[return-value]
+
+    def _google(self) -> GoogleProvider:
+        if "google" not in self._providers:
+            cfg = self._config.providers.google
+            self._providers["google"] = GoogleProvider(
+                base_url=cfg.base_url or "https://generativelanguage.googleapis.com/v1beta/openai",
+                api_key=cfg.api_key,
+                timeout=float(self._config.limits.request_timeout_seconds),
+            )
+        return self._providers["google"]  # type: ignore[return-value]

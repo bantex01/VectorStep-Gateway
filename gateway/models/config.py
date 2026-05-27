@@ -35,6 +35,8 @@ class ProviderConfig(BaseModel):
 class ProvidersConfig(BaseModel):
     anthropic: ProviderConfig = ProviderConfig()
     openrouter: ProviderConfig = ProviderConfig()
+    ollama: ProviderConfig = ProviderConfig()
+    google: ProviderConfig = ProviderConfig()
 
 
 class LoggingConfig(BaseModel):
