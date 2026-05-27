@@ -37,7 +37,7 @@ providers:
     api_key: ${OPENROUTER_API_KEY}
     base_url: https://openrouter.ai/api/v1
   ollama:
-    base_url: http://localhost:11434/v1
+    base_url: http://adalton-mm2:11434/v1
   google:
     api_key: ${GOOGLE_API_KEY}
     base_url: https://generativelanguage.googleapis.com/v1beta/openai

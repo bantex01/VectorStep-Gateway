@@ -67,8 +67,13 @@ class GoogleProvider(BaseProvider):
 
         content_blocks: list[dict] = []
 
-        if message.get("content"):
-            content_blocks.append({"type": "text", "text": message["content"]})
+        # Some models (e.g. Qwen 3.5) put output in 'reasoning' and leave 'content' empty
+        text_content = message.get("content") or ""
+        if not text_content and message.get("reasoning"):
+            text_content = message["reasoning"]
+
+        if text_content:
+            content_blocks.append({"type": "text", "text": text_content})
 
         for tc in message.get("tool_calls") or []:
             args = tc["function"]["arguments"]
