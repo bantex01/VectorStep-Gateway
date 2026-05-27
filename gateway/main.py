@@ -76,7 +76,16 @@ app = FastAPI(lifespan=lifespan)
 @app.get("/agents")
 async def list_agents():
     agents: dict[str, AgentConfig] = _state.get("agents", {})
-    return {"agents": [{"name": a.name, "model": a.model} for a in agents.values()]}
+    return {"agents": [{"name": a.name, "model": a.model, "tools": a.tools} for a in agents.values()]}
+
+
+@app.get("/agents/{agent_name}/soul")
+async def get_agent_soul(agent_name: str):
+    agents: dict[str, AgentConfig] = _state.get("agents", {})
+    agent = agents.get(agent_name)
+    if not agent:
+        return JSONResponse(status_code=404, content={"error": f"Agent '{agent_name}' not found"})
+    return {"name": agent.name, "content": agent.soul}
 
 
 @app.post("/reload")
