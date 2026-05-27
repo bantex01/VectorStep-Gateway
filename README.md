@@ -69,7 +69,7 @@ P-Ork-Gateway/
 ```yaml
 server:
   host: 0.0.0.0
-  port: 18789              # NOTE: same default as OpenClaw — change if running both
+  port: 18780           # Different from OpenClaw (18789) to avoid collision
 
 agents_dir: ./agents       # directory containing agent subdirectories
 
