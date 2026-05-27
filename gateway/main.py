@@ -210,6 +210,10 @@ async def rpc(ws: WebSocket):
                     effective_model = model_override or agent.model
                     if effective_model.startswith("openrouter/"):
                         provider_name = "openrouter"
+                    elif effective_model.startswith("ollama/"):
+                        provider_name = "ollama"
+                    elif effective_model.startswith("google/"):
+                        provider_name = "google"
                     else:
                         provider_name = "anthropic"
 
