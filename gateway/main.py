@@ -212,6 +212,8 @@ async def rpc(ws: WebSocket):
                         provider_name = "openrouter"
                     elif effective_model.startswith("ollama/"):
                         provider_name = "ollama"
+                    elif effective_model.startswith("ollama-cloud/"):
+                        provider_name = "ollama-cloud"
                     elif effective_model.startswith("google/"):
                         provider_name = "google"
                     else:

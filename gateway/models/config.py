@@ -36,6 +36,7 @@ class ProvidersConfig(BaseModel):
     anthropic: ProviderConfig = ProviderConfig()
     openrouter: ProviderConfig = ProviderConfig()
     ollama: ProviderConfig = ProviderConfig()
+    ollama_cloud: ProviderConfig = ProviderConfig()
     google: ProviderConfig = ProviderConfig()
 
 

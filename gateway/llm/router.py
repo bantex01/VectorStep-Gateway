@@ -33,6 +33,8 @@ class LLMRouter:
             return self._anthropic(), model_string[len("anthropic/"):]
         if model_string.startswith("ollama/"):
             return self._ollama(), model_string[len("ollama/"):]
+        if model_string.startswith("ollama-cloud/"):
+            return self._ollama_cloud(), model_string[len("ollama-cloud/"):]
         if model_string.startswith("google/"):
             return self._google(), model_string[len("google/"):]
         return self._anthropic(), model_string
@@ -65,6 +67,16 @@ class LLMRouter:
                 timeout=float(self._config.limits.request_timeout_seconds),
             )
         return self._providers["ollama"]  # type: ignore[return-value]
+
+    def _ollama_cloud(self) -> OllamaProvider:
+        if "ollama_cloud" not in self._providers:
+            cfg = self._config.providers.ollama_cloud
+            self._providers["ollama_cloud"] = OllamaProvider(
+                base_url=cfg.base_url or "https://ollama.com/api",
+                api_key=cfg.api_key,
+                timeout=float(self._config.limits.request_timeout_seconds),
+            )
+        return self._providers["ollama_cloud"]  # type: ignore[return-value]
 
     def _google(self) -> GoogleProvider:
         if "google" not in self._providers:

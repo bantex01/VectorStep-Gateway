@@ -52,7 +52,7 @@ class AgentRunner:
 
         model_string = model_override or agent.model
         provider, model_name = self._router.get_provider_and_model(model_string)
-        is_openai_compat = model_string.startswith(("openrouter/", "ollama/", "google/"))
+        is_openai_compat = model_string.startswith(("openrouter/", "ollama/", "ollama-cloud/", "google/"))
 
         # Resolve tools for this agent and translate to provider format
         mcp_tools = mcp_manager.get_tools_for_agent(agent)
