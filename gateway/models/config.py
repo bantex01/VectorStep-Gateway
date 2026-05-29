@@ -3,7 +3,7 @@ import re
 from typing import Optional
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class LimitsConfig(BaseModel):
@@ -33,11 +33,13 @@ class ProviderConfig(BaseModel):
 
 
 class ProvidersConfig(BaseModel):
-    anthropic: ProviderConfig = ProviderConfig()
-    openrouter: ProviderConfig = ProviderConfig()
-    ollama: ProviderConfig = ProviderConfig()
-    ollama_cloud: ProviderConfig = ProviderConfig()
-    google: ProviderConfig = ProviderConfig()
+    model_config = ConfigDict(populate_by_name=True)
+
+    anthropic: ProviderConfig = Field(default_factory=ProviderConfig)
+    openrouter: ProviderConfig = Field(default_factory=ProviderConfig)
+    ollama: ProviderConfig = Field(default_factory=ProviderConfig, alias="ollama-local")
+    ollama_cloud: ProviderConfig = Field(default_factory=ProviderConfig, alias="ollama-cloud")
+    google: ProviderConfig = Field(default_factory=ProviderConfig)
 
 
 class LoggingConfig(BaseModel):
