@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 
 import httpx
 
@@ -96,5 +97,101 @@ class OllamaProvider(BaseProvider):
             usage={
                 "input_tokens": usage.get("prompt_tokens", 0),
                 "output_tokens": usage.get("completion_tokens", 0),
+            },
+        )
+
+
+class OllamaCloudProvider(BaseProvider):
+    """Provider for Ollama Cloud (https://ollama.com/api/chat).
+
+    Uses Ollama's native /api/chat format, not the OpenAI-compat /v1/ endpoint.
+    Tool definitions are sent in OpenAI function format (same as the local Ollama
+    native API accepts). Tool call IDs are generated locally when the model omits them.
+    """
+
+    def __init__(self, base_url: str = "https://ollama.com/api", api_key: str = "", timeout: float = 180.0) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._api_key = api_key
+        self._timeout = timeout
+
+    async def complete(
+        self,
+        system: str,
+        messages: list,
+        tools: list[dict] | None,
+        model: str,
+        max_tokens: int,
+        thinking_level: str | None = None,
+    ) -> ProviderResponse:
+        if thinking_level and thinking_level != "off":
+            logger.warning(
+                "Ollama Cloud does not support extended thinking; ignoring thinking_level=%r",
+                thinking_level,
+            )
+
+        all_messages = [{"role": "system", "content": system}, *messages]
+
+        payload: dict = {
+            "model": model,
+            "messages": all_messages,
+            "stream": False,
+        }
+        if tools:
+            payload["tools"] = tools
+
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+
+        url = f"{self._base_url}/chat"
+
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                resp = await client.post(url, json=payload, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+        except httpx.HTTPStatusError as exc:
+            raise ProviderError(
+                f"Ollama Cloud HTTP {exc.response.status_code}: {exc.response.text}"
+            ) from exc
+        except httpx.RequestError as exc:
+            raise ProviderError(f"Ollama Cloud request error: {exc}") from exc
+
+        # Native Ollama response: top-level "message" object, not choices[]
+        message = data.get("message", {})
+        done_reason = data.get("done_reason", "stop")
+
+        content_blocks: list[dict] = []
+
+        text_content = message.get("content") or ""
+        if text_content:
+            content_blocks.append({"type": "text", "text": text_content})
+
+        for tc in message.get("tool_calls") or []:
+            func = tc.get("function", {})
+            args = func.get("arguments", {})
+            if isinstance(args, str):
+                args = json.loads(args)
+            # Native Ollama tool calls may omit IDs — generate one if absent
+            tool_id = tc.get("id") or f"call_{uuid.uuid4().hex[:8]}"
+            content_blocks.append(
+                {
+                    "type": "tool_use",
+                    "id": tool_id,
+                    "name": func.get("name", ""),
+                    "input": args,
+                }
+            )
+
+        stop_reason = "tool_use" if done_reason == "tool_calls" else done_reason
+
+        return ProviderResponse(
+            content_blocks=content_blocks,
+            stop_reason=stop_reason,
+            model_used=data.get("model", model),
+            usage={
+                # Native Ollama uses prompt_eval_count / eval_count
+                "input_tokens": data.get("prompt_eval_count", 0),
+                "output_tokens": data.get("eval_count", 0),
             },
         )

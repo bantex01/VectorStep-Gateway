@@ -5,7 +5,7 @@ import logging
 from gateway.llm.providers.anthropic import AnthropicProvider
 from gateway.llm.providers.base import BaseProvider
 from gateway.llm.providers.google import GoogleProvider
-from gateway.llm.providers.ollama import OllamaProvider
+from gateway.llm.providers.ollama import OllamaCloudProvider, OllamaProvider
 from gateway.llm.providers.openrouter import OpenRouterProvider
 from gateway.models.config import GatewayConfig
 
@@ -68,10 +68,10 @@ class LLMRouter:
             )
         return self._providers["ollama"]  # type: ignore[return-value]
 
-    def _ollama_cloud(self) -> OllamaProvider:
+    def _ollama_cloud(self) -> OllamaCloudProvider:
         if "ollama_cloud" not in self._providers:
             cfg = self._config.providers.ollama_cloud
-            self._providers["ollama_cloud"] = OllamaProvider(
+            self._providers["ollama_cloud"] = OllamaCloudProvider(
                 base_url=cfg.base_url or "https://ollama.com/api",
                 api_key=cfg.api_key,
                 timeout=float(self._config.limits.request_timeout_seconds),
