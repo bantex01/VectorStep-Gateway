@@ -137,7 +137,20 @@ class OllamaCloudProvider(BaseProvider):
                     tool_calls.append({"function": {"name": func.get("name", ""), "arguments": args}})
                 out.append({"role": "assistant", "content": msg.get("content", ""), "tool_calls": tool_calls})
             elif msg.get("role") == "tool":
-                out.append({"role": "tool", "content": msg.get("content", "")})
+                content = msg.get("content", "")
+                # mcp_result_to_openrouter json-dumps the MCP content list for non-error
+                # results (e.g. '[{"type": "text", "text": "..."}]'). Native Ollama
+                # expects a plain string — unwrap it here.
+                try:
+                    parsed = json.loads(content)
+                    if isinstance(parsed, list):
+                        content = "\n".join(
+                            item.get("text", "") for item in parsed
+                            if isinstance(item, dict) and item.get("type") == "text"
+                        )
+                except (json.JSONDecodeError, AttributeError):
+                    pass
+                out.append({"role": "tool", "content": content})
             else:
                 out.append(msg)
         return out
