@@ -160,10 +160,15 @@ class OllamaCloudProvider(BaseProvider):
         # Native Ollama response: top-level "message" object, not choices[]
         message = data.get("message", {})
         done_reason = data.get("done_reason", "stop")
+        logger.debug("Ollama Cloud raw message: %s", message)
 
         content_blocks: list[dict] = []
 
+        # Some models (e.g. Qwen with thinking) put output in 'reasoning' and
+        # leave 'content' empty.
         text_content = message.get("content") or ""
+        if not text_content and message.get("reasoning"):
+            text_content = message["reasoning"]
         if text_content:
             content_blocks.append({"type": "text", "text": text_content})
 
