@@ -114,6 +114,34 @@ class OllamaCloudProvider(BaseProvider):
         self._api_key = api_key
         self._timeout = timeout
 
+    @staticmethod
+    def _normalize_messages(messages: list) -> list:
+        """Convert OpenAI-format message history to native Ollama format.
+
+        The agent runner builds history in OpenAI-compat format (arguments as
+        JSON strings, tool_call_id on tool results). Native Ollama /api/chat
+        expects arguments as dicts and has no tool_call_id field.
+        """
+        out = []
+        for msg in messages:
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                tool_calls = []
+                for tc in msg["tool_calls"]:
+                    func = tc.get("function", {})
+                    args = func.get("arguments", {})
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except json.JSONDecodeError:
+                            pass
+                    tool_calls.append({"function": {"name": func.get("name", ""), "arguments": args}})
+                out.append({"role": "assistant", "content": msg.get("content", ""), "tool_calls": tool_calls})
+            elif msg.get("role") == "tool":
+                out.append({"role": "tool", "content": msg.get("content", "")})
+            else:
+                out.append(msg)
+        return out
+
     async def complete(
         self,
         system: str,
@@ -129,7 +157,7 @@ class OllamaCloudProvider(BaseProvider):
                 thinking_level,
             )
 
-        all_messages = [{"role": "system", "content": system}, *messages]
+        all_messages = [{"role": "system", "content": system}, *self._normalize_messages(messages)]
 
         payload: dict = {
             "model": model,
@@ -164,11 +192,10 @@ class OllamaCloudProvider(BaseProvider):
 
         content_blocks: list[dict] = []
 
-        # Some models (e.g. Qwen with thinking) put output in 'reasoning' and
-        # leave 'content' empty.
+        # Some models put output in 'reasoning' or 'thinking' and leave 'content' empty.
         text_content = message.get("content") or ""
-        if not text_content and message.get("reasoning"):
-            text_content = message["reasoning"]
+        if not text_content:
+            text_content = message.get("reasoning") or message.get("thinking") or ""
         if text_content:
             content_blocks.append({"type": "text", "text": text_content})
 
