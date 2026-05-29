@@ -13,10 +13,11 @@ logger = logging.getLogger(__name__)
 
 
 class MCPTool(BaseModel):
-    name: str
+    name: str                  # original MCP tool name (used when calling the transport)
+    registered_name: str       # namespaced name exposed to LLMs: "{server_name}__{name}"
     description: str
-    input_schema: dict        # JSON Schema from MCP inputSchema
-    server_name: str          # which MCP server owns this tool
+    input_schema: dict         # JSON Schema from MCP inputSchema
+    server_name: str           # which MCP server owns this tool
 
 
 class MCPToolResult(BaseModel):
@@ -61,7 +62,7 @@ class MCPManager:
             name: _ServerState(name, cfg, self._tool_timeout)
             for name, cfg in config.mcp_servers.items()
         }
-        # Global tool registry: tool_name -> MCPTool
+        # Global tool registry: "{server_name}__{tool_name}" -> MCPTool
         self._tools: dict[str, MCPTool] = {}
 
     # ------------------------------------------------------------------
@@ -104,6 +105,7 @@ class MCPManager:
         ]
 
     async def call_tool(self, tool_name: str, arguments: dict) -> MCPToolResult:
+        # tool_name here is the registered_name (namespaced) returned by the LLM
         tool = self._tools.get(tool_name)
         if tool is None:
             raise KeyError(f"Unknown tool: {tool_name}")
@@ -112,7 +114,7 @@ class MCPManager:
         if state is None or not state.running or state.transport is None:
             raise RuntimeError(f"MCP server '{tool.server_name}' is not running")
 
-        raw = await state.transport.call_tool(tool_name, arguments)
+        raw = await state.transport.call_tool(tool.name, arguments)
         return MCPToolResult(
             content=raw.get("content", []),
             is_error=raw.get("isError", False),
@@ -135,6 +137,7 @@ class MCPManager:
             grouped.setdefault(tool.server_name, []).append(
                 {
                     "name": tool.name,
+                    "registeredName": tool.registered_name,
                     "description": tool.description,
                     "inputSchema": tool.input_schema,
                 }
@@ -174,16 +177,10 @@ class MCPManager:
         registered = 0
         for t in raw_tools:
             name = t["name"]
-            if name in self._tools:
-                logger.warning(
-                    "Tool name collision: '%s' already registered from server '%s'; "
-                    "overwriting with server '%s'",
-                    name,
-                    self._tools[name].server_name,
-                    state.name,
-                )
-            self._tools[name] = MCPTool(
+            registered_name = f"{state.name}__{name}"
+            self._tools[registered_name] = MCPTool(
                 name=name,
+                registered_name=registered_name,
                 description=t.get("description", ""),
                 input_schema=t.get("inputSchema", {}),
                 server_name=state.name,

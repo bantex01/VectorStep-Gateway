@@ -6,7 +6,7 @@ from gateway.mcp.manager import MCPTool, MCPToolResult
 def mcp_to_anthropic(tools: list[MCPTool]) -> list[dict]:
     return [
         {
-            "name": tool.name,
+            "name": tool.registered_name,
             "description": tool.description,
             "input_schema": tool.input_schema,
         }
@@ -19,7 +19,7 @@ def mcp_to_openrouter(tools: list[MCPTool]) -> list[dict]:
         {
             "type": "function",
             "function": {
-                "name": tool.name,
+                "name": tool.registered_name,
                 "description": tool.description,
                 "parameters": tool.input_schema,
             },
