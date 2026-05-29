@@ -49,6 +49,7 @@ class MCPTransport:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=merged_env,
+            limit=4 * 1024 * 1024,  # 4MB — MCP servers can return large tool-list responses
         )
         self._reader_task = asyncio.create_task(
             self._read_loop(), name="mcp-reader"
