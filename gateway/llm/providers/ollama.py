@@ -201,7 +201,7 @@ class OllamaCloudProvider(BaseProvider):
         # Native Ollama response: top-level "message" object, not choices[]
         message = data.get("message", {})
         done_reason = data.get("done_reason", "stop")
-        logger.debug("Ollama Cloud raw message: %s", message)
+        logger.debug("Ollama Cloud raw message (done_reason=%s): %s", done_reason, message)
 
         content_blocks: list[dict] = []
 
