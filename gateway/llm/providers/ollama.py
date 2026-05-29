@@ -228,7 +228,9 @@ class OllamaCloudProvider(BaseProvider):
                 }
             )
 
-        stop_reason = "tool_use" if done_reason == "tool_calls" else done_reason
+        # Native Ollama Cloud returns done_reason="stop" even when tool calls are
+        # present — derive stop_reason from the message content instead.
+        stop_reason = "tool_use" if content_blocks and any(b.get("type") == "tool_use" for b in content_blocks) else done_reason
 
         return ProviderResponse(
             content_blocks=content_blocks,
