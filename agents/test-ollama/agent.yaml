@@ -1,4 +1,0 @@
-name: test-ollama
-model: ollama/qwen3.5:4b
-max_tokens: 500
-tools: []

@@ -1,7 +1,0 @@
-name: sre-triage-sonnet
-model: anthropic/claude-sonnet-4-6
-max_tokens: 8192
-tools:
-  - filesystem
-  - grafana
-  - tavily

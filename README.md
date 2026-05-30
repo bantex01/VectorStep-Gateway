@@ -1,262 +1,251 @@
-# P-Ork Gateway Service
+# P-Ork Gateway
 
-A Python/FastAPI WebSocket gateway that runs AI agents with MCP tools, replacing OpenClaw as the executor backend for P-Ork pipelines.
+A lightweight Python/FastAPI WebSocket gateway that runs AI agents with MCP tool access. It acts as an executor backend for [P-Ork](https://github.com/bantex01/P-Ork) pipelines, providing an alternative to OpenClaw with support for multiple LLM providers and configurable MCP tool servers.
+
+## Overview
+
+The gateway sits between P-Ork and your LLM providers. P-Ork sends an agent request over WebSocket; the gateway runs the full agentic loop (LLM calls, MCP tool execution, multi-turn conversation) and returns the final result. P-Ork never sees intermediate tool calls or thinking content — it gets one clean response.
+
+---
 
 ## Quick Start
 
 ```bash
-# Install dependencies
+# 1. Install dependencies
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+source .venv/bin/activate
+pip install -r requirements.txt
 
-# Set required environment variables (at least one LLM provider)
-export ANTHROPIC_API_KEY=sk-ant-...     # for Anthropic provider
-# export OPENROUTER_API_KEY=...        # for OpenRouter
-# export OLLAMA_API_KEY=...             # for Ollama cloud
-# export GOOGLE_API_KEY=...             # for Google Gemini
+# 2. Copy and edit the config template
+cp templates/config.yaml.example config.yaml
+# Edit config.yaml — set your LLM provider keys and MCP servers
 
-# Start the gateway
-.venv/bin/uvicorn gateway.main:app --port 18789
+# 3. Create your agents directory from the templates
+cp -r templates/agents ./agents
+# Edit agents/ to define your actual agents (model, tools, soul)
 
-# The auth token is auto-generated on first run.
-# Find it in ~/.pork-gateway/identity/device-auth.json
-# Use the 'operator' token value for P-Ork's executors.gateway.token config.
+# 4. Set environment variables for any ${VAR_NAME} placeholders in config.yaml
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# 5. Start the gateway
+uvicorn gateway.main:app --port 18780
+
+# 6. Find your operator token (auto-generated on first run)
+cat ~/.pork-gateway/identity/device-auth.json
+# Copy the 'operator' token — you'll need it for P-Ork's config
 ```
 
-The gateway auto-generates an identity (device key + operator token) on first run. The operator token is stored in `~/.pork-gateway/identity/device-auth.json`.
+Both `config.yaml` and `agents/` are gitignored — they contain personal credentials and environment-specific agent definitions. Use the files in `templates/` as your starting point.
+
+---
 
 ## Directory Structure
 
 ```
 P-Ork-Gateway/
-├── config.yaml                  # Gateway configuration (providers, MCP servers, limits)
-├── agents/                       # Agent definitions (one directory per agent)
-│   ├── sre-triage-sonnet/
-│   │   ├── agent.yaml            # Agent config (model, tools, max_tokens)
-│   │   └── soul.md              # System prompt / personality
-│   └── test-ollama/
-│       ├── agent.yaml
-│       └── soul.md
-├── gateway/                     # Gateway source code
-│   ├── main.py                  # FastAPI app, WS endpoint, auth, agent handler
-│   ├── auth/device.py           # Identity generation, token auth
-│   ├── agents/loader.py         # Agent YAML + soul.md loader with SIGHUP reload
-│   ├── session/manager.py       # Session key registry (prefix validation, isolation)
+├── templates/                        # Starting point — copy these, don't edit in place
+│   ├── config.yaml.example           # Config template with all options documented
+│   └── agents/
+│       ├── sre-triage/               # Example: SRE triage agent with tool access
+│       │   ├── agent.yaml
+│       │   └── soul.md
+│       └── generic-pipeline-step/    # Example: minimal pipeline step agent
+│           ├── agent.yaml
+│           └── soul.md
+├── agents/                           # Your agent definitions (gitignored)
+├── config.yaml                       # Your config (gitignored)
+├── gateway/
+│   ├── main.py                       # FastAPI app, WebSocket endpoint, REST API
+│   ├── auth/device.py                # Identity generation, token auth
+│   ├── agents/loader.py              # Agent YAML + soul.md loader, SIGHUP reload
+│   ├── session/manager.py            # Session key registry with prefix validation
 │   ├── mcp/
-│   │   ├── transport.py         # MCP stdio JSON-RPC transport
-│   │   └── manager.py          # MCP process manager, tool registry, call routing
+│   │   ├── transport.py              # MCP stdio JSON-RPC subprocess transport
+│   │   └── manager.py               # MCP process manager, tool registry, call routing
 │   ├── llm/
-│   │   ├── router.py            # Model string → provider routing
-│   │   ├── tool_translator.py   # MCP tool schemas ↔ provider format translation
-│   │   ├── providers/
-│   │   │   ├── base.py          # BaseProvider ABC, ProviderResponse
-│   │   │   ├── anthropic.py     # Anthropic API (native SDK)
-│   │   │   ├── openrouter.py    # OpenRouter via httpx (OpenAI-compat)
-│   │   │   ├── ollama.py        # Ollama local or cloud (OpenAI-compat)
-│   │   │   └── google.py       # Google Gemini via OpenAI-compat endpoint
-│   │   └── runner/
-│   │       └── agent_runner.py  # Full agentic loop: LLM ↔ MCP tool calls
+│   │   ├── router.py                 # Model string → provider routing
+│   │   ├── tool_translator.py        # MCP tool schemas ↔ provider format translation
+│   │   └── providers/
+│   │       ├── base.py               # BaseProvider ABC, ProviderResponse
+│   │       ├── anthropic.py          # Anthropic API (native SDK, extended thinking)
+│   │       ├── openrouter.py         # OpenRouter via httpx (OpenAI-compat)
+│   │       ├── ollama.py             # Local Ollama (OpenAI-compat) + Ollama Cloud (native)
+│   │       └── google.py             # Google Gemini via OpenAI-compat endpoint
+│   ├── runner/agent_runner.py        # Full agentic loop: LLM ↔ MCP tool calls
 │   └── models/
-│       ├── config.py            # GatewayConfig, provider configs, limits
-│       └── agent.py             # AgentConfig Pydantic model
+│       ├── config.py                 # GatewayConfig, ProviderConfig, LimitsConfig
+│       └── agent.py                  # AgentConfig Pydantic model
 └── requirements.txt
 ```
 
-## Configuration Reference (`config.yaml`)
+---
 
-### Full Example
+## Configuration (`config.yaml`)
+
+Copy `templates/config.yaml.example` to `config.yaml` and edit. Values support `${VAR_NAME}` environment variable substitution throughout.
+
+### `server`
+
+| Field | Default | Description |
+|---|---|---|
+| `host` | `0.0.0.0` | Bind address |
+| `port` | `18780` | Bind port. Use a different port from OpenClaw (18789) if running both. |
+
+### `identity`
+
+| Field | Default | Description |
+|---|---|---|
+| `path` | `~/.pork-gateway/identity` | Where identity files are stored. Auto-generated on first run. |
+
+The operator token (used by P-Ork to authenticate) is written to `<path>/device-auth.json` on first run.
+
+### `limits`
+
+| Field | Default | Description |
+|---|---|---|
+| `max_agent_iterations` | `20` | Max LLM ↔ tool call loops before aborting a run |
+| `request_timeout_seconds` | `180` | Timeout for a single LLM API call |
+| `mcp_tool_timeout_seconds` | `30` | Timeout for a single MCP tool call |
+
+### `mcp_servers`
+
+Each key is a server name agents can reference in their `tools:` list. The gateway spawns each as a subprocess on startup using stdio JSON-RPC transport.
 
 ```yaml
-server:
-  host: 0.0.0.0
-  port: 18780           # Different from OpenClaw (18789) to avoid collision
-
-agents_dir: ./agents       # directory containing agent subdirectories
-
-identity:
-  path: ~/.pork-gateway/identity   # auto-generated on first run if absent
-
-# Runtime limits
-limits:
-  max_agent_iterations: 20         # max LLM ↔ tool call loops per agent run
-  request_timeout_seconds: 180     # how long to wait for a single LLM API response
-  mcp_tool_timeout_seconds: 30     # per-tool-call timeout against MCP servers
-
-# MCP tool servers — subprocesses the gateway spawns and manages
 mcp_servers:
-  filesystem:
-    command: npx
-    args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
   grafana:
     command: npx
     args: ["-y", "@grafana/mcp-grafana"]
     env:
       GRAFANA_URL: ${GRAFANA_URL}
       GRAFANA_TOKEN: ${GRAFANA_TOKEN}
-  tavily:
-    command: npx
-    args: ["-y", "tavily-mcp"]
-    env:
-      TAVILY_API_KEY: ${TAVILY_API_KEY}
+```
 
-# LLM providers — each gets a model prefix for routing
+| Field | Required | Description |
+|---|---|---|
+| `command` | Yes | Executable to run (`npx`, `python3`, etc.) |
+| `args` | No | Arguments list |
+| `env` | No | Environment variables for the subprocess. Supports `${VAR_NAME}` substitution. |
+
+### `providers`
+
+Each key becomes a model prefix for routing. Configure only the providers you need.
+
+```yaml
 providers:
   anthropic:
     api_key: ${ANTHROPIC_API_KEY}
   openrouter:
     api_key: ${OPENROUTER_API_KEY}
     base_url: https://openrouter.ai/api/v1
-  ollama:                          # local Ollama (e.g. on mm2) — no API key needed
-    base_url: http://adalton-mm2:11434/v1
-  ollama-cloud:                     # Ollama cloud (ollama.com) — needs API key
+  ollama-local:
+    base_url: http://localhost:11434/v1
+  ollama-cloud:
     api_key: ${OLLAMA_API_KEY}
     base_url: https://ollama.com/api
-  google:                          # Google Gemini via OpenAI-compat endpoint
+  google:
     api_key: ${GOOGLE_API_KEY}
     base_url: https://generativelanguage.googleapis.com/v1beta/openai
-
-logging:
-  level: INFO
 ```
 
-### Config Sections
-
-#### `server`
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `host` | `0.0.0.0` | Bind address |
-| `port` | `18789` | Bind port (same as OpenClaw — change if running both on same machine) |
-
-#### `identity`
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `path` | `~/.pork-gateway/identity` | Where identity files are stored. Auto-generated on first run. |
-
-The operator token (used by P-Ork to authenticate with the gateway) is generated and stored in `<path>/device-auth.json`.
-
-#### `limits`
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `max_agent_iterations` | `20` | Max LLM ↔ tool call loops before aborting |
-| `request_timeout_seconds` | `180` | Timeout for a single LLM API call |
-| `mcp_tool_timeout_seconds` | `30` | Timeout for a single MCP tool call |
-
-#### `mcp_servers`
-
-Each key is a server name. The gateway spawns each as a subprocess using stdio JSON-RPC transport.
-
 | Field | Required | Description |
-|-------|----------|-------------|
-| `command` | Yes | Executable to run (e.g. `npx`, `python3`) |
-| `args` | No | Arguments to pass |
-| `env` | No | Environment variables for the subprocess (supports `${VAR_NAME}` resolution) |
+|---|---|---|
+| `api_key` | No | API key. Empty string = no auth header sent. |
+| `base_url` | No | Override the provider's default endpoint. |
 
-#### `providers`
+**Default endpoints:**
 
-Each key becomes a model prefix. Every provider has the same config shape:
+| Provider key | Default `base_url` | Notes |
+|---|---|---|
+| `anthropic` | SDK default | Uses Anthropic Python SDK natively |
+| `openrouter` | `https://openrouter.ai/api/v1` | OpenAI-compat |
+| `ollama-local` | `http://localhost:11434/v1` | Local Ollama OpenAI-compat endpoint |
+| `ollama-cloud` | `https://ollama.com/api` | Native Ollama `/api/chat` endpoint |
+| `google` | `https://generativelanguage.googleapis.com/v1beta/openai` | OpenAI-compat |
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `api_key` | No | API key. Env vars resolved via `${VAR_NAME}`. Empty = no auth header sent. |
-| `base_url` | No | Override the default endpoint URL. |
-
-**Default `base_url` values per provider:**
-
-| Provider | Default `base_url` | Auth |
-|----------|-------------------|------|
-| `anthropic` | (SDK default) | `x-api-key` header (SDK handles this) |
-| `openrouter` | `https://openrouter.ai/api/v1` | `Authorization: Bearer` |
-| `ollama` | `http://localhost:11434/v1` | None (or Bearer if `api_key` set) |
-| `ollama-cloud` | `https://ollama.com/api` | `Authorization: Bearer` |
-| `google` | `https://generativelanguage.googleapis.com/v1beta/openai` | `x-goog-api-key` header |
+---
 
 ## Model Routing
 
-Model strings determine which provider handles the request. Use a prefix:
+The prefix in a model string determines which provider handles the call:
 
-| Model String | Provider | Example |
-|--------------|----------|---------|
-| `anthropic/claude-sonnet-4-6-20250514` | Anthropic (direct SDK) | Native tool calling, extended thinking |
-| `openrouter/deepseek-chat` | OpenRouter | OpenAI-compat, no thinking |
-| `ollama/qwen3.5:4b` | Local Ollama | Free, on your hardware |
-| `ollama-cloud/glm-5.1:cloud` | Ollama Cloud | Paid, hosted models |
-| `google/gemini-2.0-flash` | Google Gemini | OpenAI-compat endpoint |
-| `claude-sonnet-4-6-20250514` | Anthropic (no prefix = default) | Bare names default to Anthropic |
+| Model string | Provider | Notes |
+|---|---|---|
+| `anthropic/claude-sonnet-4-6` | Anthropic | Native SDK, extended thinking supported |
+| `openrouter/deepseek/deepseek-chat` | OpenRouter | OpenAI-compat, thinking not supported |
+| `ollama-local/qwen3:8b` | Local Ollama | OpenAI-compat via `/v1/chat/completions` |
+| `ollama-cloud/gemma3:27b` | Ollama Cloud | Native Ollama `/api/chat` |
+| `google/gemini-2.0-flash` | Google Gemini | OpenAI-compat |
+| `claude-sonnet-4-6` | Anthropic | Bare name (no prefix) defaults to Anthropic |
+
+The key name in `providers:` config must match the prefix in the model string exactly.
+
+---
 
 ## Creating Agents
 
-Agents live as subdirectories under `agents_dir` (default: `./agents/`).
-
-### Agent Directory Structure
-
-```
-agents/
-└── my-agent/           # directory name can be anything
-    ├── agent.yaml      # required — agent configuration
-    └── soul.md         # required — system prompt / personality
-```
+Agents live as subdirectories under `agents_dir` (default: `./agents/`). Each agent needs two files.
 
 ### `agent.yaml`
 
 ```yaml
-name: my-agent                   # must match directory name
-model: ollama-cloud/glm-5.1:cloud  # model string (prefix/bare name)
-max_tokens: 4096                 # max output tokens per LLM call
-tools:                            # MCP server names the agent can use
-  - filesystem
-  - tavily
+name: sre-triage          # must match the directory name
+model: anthropic/claude-sonnet-4-6
+max_tokens: 8192
+tools:                    # MCP server names from mcp_servers config
+  - grafana
+  - atlassian
 ```
 
 | Field | Required | Description |
-|-------|----------|-------------|
-| `name` | Yes | Agent name. Must match the directory name. |
-| `model` | Yes | Default model string. Can be overridden per-request. |
+|---|---|---|
+| `name` | Yes | Agent identifier. Must match the directory name. Referenced as `agentId` in requests. |
+| `model` | Yes | Default model string. Can be overridden per-request via `executor_config.model` in P-Ork. |
 | `max_tokens` | Yes | Max output tokens per LLM call. |
-| `tools` | No | List of MCP server names (from `mcp_servers` config). Agent gets all tools from listed servers. |
+| `tools` | No | MCP server names. The agent gets all tools from each listed server. Omit or leave empty for no tool access. |
 
 ### `soul.md`
 
-The system prompt / personality for the agent. Written in Markdown. This is sent as the `system` message to the LLM.
+The system prompt. Written in Markdown, sent as the `system` message to the LLM on every call.
 
-```markdown
-You are an SRE triage agent. Your job is to assess alerts and recommend actions.
+Good soul files are:
+- **Narrow in scope** — describe exactly what this agent does and does not do
+- **Explicit about output format** — tell the model to return JSON only, no preamble
+- **Clear on confidence scoring** — explain what high/low confidence means for this agent's task
 
-Always return structured JSON with:
-- confidence (0.0-1.0)
-- summary
-- next_step_context
-- reasoning (supports, contradicts, assumptions)
-```
+See `templates/agents/` for annotated examples.
 
 ### Hot Reload
 
-Send `POST /reload` or `SIGHUP` to the gateway process to reload agent configs without restarting.
+```bash
+POST /reload          # via HTTP
+kill -HUP <pid>       # via SIGHUP
+```
+
+Reloads all agent configs from disk without restarting. In-progress runs are unaffected.
+
+---
 
 ## WebSocket Protocol
 
-P-Ork (or any client) connects to the gateway at `ws://<host>:<port>/rpc`.
+Connect to `ws://<host>:<port>/rpc`.
 
-### Authentication Flow
-
-1. Client connects → gateway sends `challenge` event with a nonce
-2. Client sends `connect` request with auth token
-3. Gateway responds with protocol version
+### Authentication
 
 ```json
-// Gateway → Client (automatic on connect)
-{"type": "event", "event": "challenge", "payload": {"nonce": "abc123..."}}
+// Gateway sends on connect:
+{"type": "event", "event": "challenge", "payload": {"nonce": "abc123"}}
 
-// Client → Gateway
+// Client sends connect request:
 {"type": "req", "id": "uuid-1", "method": "connect", "params": {"auth": {"token": "your-operator-token"}}}
 
-// Gateway → Client
+// Gateway responds:
 {"type": "res", "id": "uuid-1", "ok": true, "payload": {"protocol": 3}}
 ```
 
 ### Agent Request
+
+The gateway sends **two frames** with the same request `id`:
 
 ```json
 // Client → Gateway
@@ -265,18 +254,18 @@ P-Ork (or any client) connects to the gateway at `ws://<host>:<port>/rpc`.
   "id": "uuid-2",
   "method": "agent",
   "params": {
-    "agentId": "my-agent",
-    "sessionKey": "agent:my-agent:pipeline:run-123:step-1",
+    "agentId": "sre-triage",
+    "sessionKey": "agent:sre-triage:pipeline:run-123:triage",
     "message": "Assess this alert: ...",
-    "model": "ollama-cloud/glm-5.1:cloud",   // optional — overrides agent default
-    "thinkingLevel": "medium"                // optional — Anthropic only
+    "model": "anthropic/claude-opus-4-8",    // optional — overrides agent.yaml default
+    "thinkingLevel": "medium"                // optional — Anthropic models only
   }
 }
 
-// Gateway → Client (Frame 1: accepted immediately)
+// Frame 1: accepted immediately (before agent runs)
 {"type": "res", "id": "uuid-2", "ok": true, "payload": {"status": "accepted", "runId": "uuid-3"}}
 
-// Gateway → Client (Frame 2: final result)
+// Frame 2: final result (after agent completes)
 {
   "type": "res",
   "id": "uuid-2",
@@ -288,8 +277,8 @@ P-Ork (or any client) connects to the gateway at `ws://<host>:<port>/rpc`.
       "meta": {
         "durationMs": 8503,
         "agentMeta": {
-          "provider": "ollama-cloud",
-          "model": "glm-5.1:cloud",
+          "provider": "anthropic",
+          "model": "claude-sonnet-4-6",
           "usage": {"input_tokens": 1234, "output_tokens": 456}
         },
         "aborted": false
@@ -299,76 +288,100 @@ P-Ork (or any client) connects to the gateway at `ws://<host>:<port>/rpc`.
 }
 ```
 
+On error, frame 2 is: `{"type": "res", "id": "uuid-2", "ok": false, "error": {"message": "..."}}`
+
 ### Session Keys
 
-Session keys must start with `agent:<agentId>:` — this enforces isolation between agents.
+Session keys must start with `agent:<agentId>:` — the gateway validates this to enforce isolation.
 
-- ✅ `agent:my-agent:pipeline:run-123:step-1`
-- ✅ `agent:order-intake:pipeline:abc:order-intake`
-- ❌ `pipeline:run-123:step-1` (missing agent prefix)
+```
+agent:sre-triage:pipeline:run-123:triage    ✅
+pipeline:run-123:triage                     ❌ (missing agent prefix)
+```
+
+The P-Ork `gateway` executor generates a valid session key automatically if `session_key` is omitted from `executor_config`.
+
+---
 
 ## REST Endpoints
 
 | Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/agents` | List loaded agents (name + model) |
-| `POST` | `/reload` | Reload agent configs from disk |
-| `GET` | `/mcp/tools` | List all MCP tools across all servers |
+|---|---|---|
+| `GET` | `/agents` | List loaded agents (name, model, tools) |
+| `GET` | `/agents/{name}/soul` | Return the soul.md content for an agent |
+| `POST` | `/reload` | Reload all agent configs from disk |
+| `GET` | `/mcp/tools` | List all tools across all MCP servers |
 | `GET` | `/mcp/servers` | List MCP server status (pid, tool count) |
+
+---
 
 ## Environment Variables
 
-The gateway resolves `${VAR_NAME}` patterns in `config.yaml` at load time. Common ones:
+`${VAR_NAME}` placeholders in `config.yaml` are resolved at startup. Commonly used:
 
-| Variable | Used By | Description |
-|----------|---------|-------------|
+| Variable | Used by | Description |
+|---|---|---|
 | `ANTHROPIC_API_KEY` | `providers.anthropic` | Anthropic API key |
 | `OPENROUTER_API_KEY` | `providers.openrouter` | OpenRouter API key |
-| `OLLAMA_API_KEY` | `providers.ollama-cloud` | Ollama cloud API key (get from https://ollama.com/settings/keys) |
+| `OLLAMA_API_KEY` | `providers.ollama-cloud` | Ollama Cloud API key — [get one here](https://ollama.com/settings/keys) |
 | `GOOGLE_API_KEY` | `providers.google` | Google AI API key |
 | `GRAFANA_URL` | `mcp_servers.grafana` | Grafana instance URL |
-| `GRAFANA_TOKEN` | `mcp_servers.grafana` | Grafana API token |
-| `TAVILY_API_KEY` | `mcp_servers.tavily` | Tavily search API key |
+| `GRAFANA_TOKEN` | `mcp_servers.grafana` | Grafana service account token |
+| `TAVILY_API_KEY` | `mcp_servers.tavily` | Tavily web search API key |
 | `PORK_GATEWAY_CONFIG` | Gateway startup | Override config file path (default: `config.yaml`) |
+
+---
 
 ## P-Ork Integration
 
-P-Ork uses the `GatewayExecutor` to talk to the gateway. Configure in P-Ork's `config.yaml`:
+### 1. Configure P-Ork
+
+In P-Ork's `config.yaml`:
 
 ```yaml
 executors:
   gateway:
-    url: ws://localhost:18789/rpc     # gateway WebSocket endpoint
-    token: ${PORK_GATEWAY_TOKEN}       # operator token from device-auth.json
+    url: ws://localhost:18780/ws        # gateway WebSocket endpoint
+    token: ${PORK_GATEWAY_TOKEN}        # operator token from device-auth.json
+    rest_url: http://localhost:18780    # used by the P-Ork Agents UI
 ```
 
-Then in a pipeline YAML, use `executor: gateway` instead of `executor: openclaw`:
+### 2. Use in pipeline YAML
 
 ```yaml
 steps:
   - name: triage
-    executor: gateway                    # uses GatewayExecutor
+    executor: gateway
     executor_config:
-      agent: sre-triage-sonnet           # gateway agent name
-      model: ollama-cloud/glm-5.1:cloud  # optional model override
+      agent: sre-triage                      # must match an agent in your agents/ directory
+      model: anthropic/claude-sonnet-4-6     # optional model override
+      thinking_level: low                    # optional — Anthropic models only
+    confidence_threshold: 0.70
+    on_low_confidence: escalate
+    timeout_seconds: 300
     prompt_template: |
-      Assess this alert: {{summary}}
+      Alert: {{summary}}
+      Service: {{labels.service}}
+
+      Investigate and return JSON...
 ```
 
-**Key advantage over OpenClaw executor:** No session file clearing hack. The gateway handles session isolation natively — each pipeline run gets a clean session.
+Steps within the same P-Ork pipeline can freely mix `executor: openclaw` and `executor: gateway`.
 
-## Building Stages (Completed)
+### Differences from the OpenClaw executor
 
-| Stage | Description | Status |
-|-------|-------------|--------|
-| 1 | Skeleton + Token Auth | ✅ |
-| 2 | Agent Loader + Session Manager | ✅ |
-| 3 | MCP Process Manager | ✅ |
-| 4 | LLM Executor + Tool Translation | ✅ |
-| 5a | Ollama + Google + Ollama-Cloud providers | ✅ |
-| 5b | Hardening (Ed25519, retries, Dockerfile, structured logging) | 🔜 |
+| | OpenClaw executor | Gateway executor |
+|---|---|---|
+| Auth | Ed25519 device signature | Bearer token |
+| Session isolation | Server-side (no file clearing) | Server-side |
+| Model routing | OpenClaw agent config | Gateway `providers:` config |
+| MCP tools | OpenClaw MCP servers | Gateway `mcp_servers:` config |
+| Thinking parameter | `thinking` | `thinkingLevel` |
 
-## Repo
+---
 
-- **GitHub:** https://github.com/bantex01/P-Ork-Gateway
-- **Related (P-Ork):** https://github.com/bantex01/P-Ork
+## MCP Transport Notes
+
+The gateway spawns each MCP server as a subprocess and communicates over stdio (JSON-RPC 2.0). The subprocess `stdout` stream is read with a 4MB line limit — sufficient for even large tool response payloads. If an MCP server fails to start, the gateway logs an error and continues; agents that list that server in their `tools:` will have no tools from it for that session.
+
+MCP servers do not hot-reload — adding or removing a server requires a gateway restart.
