@@ -1,0 +1,4 @@
+name: generic-pipeline-step
+model: anthropic/claude-haiku-4-5-20251001   # lighter model for simpler steps
+max_tokens: 4096
+tools: []    # add MCP server names from mcp_servers config as needed

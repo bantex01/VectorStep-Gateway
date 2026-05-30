@@ -8,4 +8,4 @@ identity/
 
 # Personal config and agent definitions — copy from templates/ to get started
 config.yaml
-agents/
+/agents/

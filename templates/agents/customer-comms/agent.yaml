@@ -1,0 +1,7 @@
+name: customer-comms
+model: "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
+max_tokens: 8192
+tools:
+  - filesystem
+  - grafana
+  - tavily

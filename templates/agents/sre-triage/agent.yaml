@@ -1,0 +1,7 @@
+name: sre-triage
+model: anthropic/claude-sonnet-4-6    # model string — see Model Routing in README
+max_tokens: 8192
+tools:
+  - grafana       # MCP server names from mcp_servers config — remove if not needed
+  - atlassian
+  - tavily
