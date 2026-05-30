@@ -1,4 +1,4 @@
-# P-Ork Gateway — Claude Code Context
+# P-Ork Gateway — Build Context
 
 ## What this is
 A Python/FastAPI WebSocket gateway that is an optional alternative to OpenClaw as the
