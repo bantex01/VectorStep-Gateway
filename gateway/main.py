@@ -4,6 +4,7 @@ import os
 import secrets
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -86,6 +87,18 @@ async def get_agent_soul(agent_name: str):
     if not agent:
         return JSONResponse(status_code=404, content={"error": f"Agent '{agent_name}' not found"})
     return {"name": agent.name, "content": agent.soul}
+
+
+@app.get("/agents/{agent_name}/agent")
+async def get_agent_config_file(agent_name: str):
+    agents: dict[str, AgentConfig] = _state.get("agents", {})
+    if agent_name not in agents:
+        return JSONResponse(status_code=404, content={"error": f"Agent '{agent_name}' not found"})
+    config: GatewayConfig = _state["config"]
+    yaml_path = Path(config.agents_dir) / agent_name / "agent.yaml"
+    if not yaml_path.exists():
+        return JSONResponse(status_code=404, content={"error": "agent.yaml not found"})
+    return {"name": agent_name, "content": yaml_path.read_text()}
 
 
 @app.post("/reload")
