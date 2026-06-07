@@ -51,6 +51,7 @@ class AgentRunner:
         thinking_level: str | None,
         mcp_manager: MCPManager,
         limits: LimitsConfig,
+        on_trace_event=None,  # Optional async callable(event: dict) — called after each trace event
     ) -> AgentRunResult:
         start = time.monotonic()
 
@@ -75,10 +76,16 @@ class AgentRunner:
         total_output_tokens = 0
         trace: list[dict] = []
 
+        async def _emit(event: dict) -> None:
+            """Append a trace event and stream it to the caller if a callback is set."""
+            trace.append(event)
+            if on_trace_event is not None:
+                await on_trace_event(event)
+
         while True:
             # ── LLM call ──────────────────────────────────────────────
             iterations += 1
-            trace.append({"type": "llm_call", "iteration": iterations})
+            await _emit({"type": "llm_call", "iteration": iterations})
             logger.debug("Agent %s — LLM call #%d", agent.name, iterations)
 
             try:
@@ -107,11 +114,11 @@ class AgentRunner:
                 btype = block.get("type")
                 if btype == "thinking":
                     content = block.get("thinking", "")
-                    trace.append({"type": "thinking", "content": content})
+                    await _emit({"type": "thinking", "content": content})
                     logger.debug("Agent %s — thinking (%d chars)", agent.name, len(content))
                 elif btype == "text" and block.get("text"):
                     content = block["text"]
-                    trace.append({"type": "text", "content": content})
+                    await _emit({"type": "text", "content": content})
                     logger.debug("Agent %s — text output (%d chars)", agent.name, len(content))
 
             tool_use_blocks = [
@@ -182,7 +189,7 @@ class AgentRunner:
                 tool_name = block["name"]
                 arguments: dict = block["input"]
 
-                trace.append({"type": "tool_call", "name": tool_name, "input": arguments})
+                await _emit({"type": "tool_call", "name": tool_name, "input": arguments})
                 logger.debug("Agent %s — tool call: %s %s", agent.name, tool_name, arguments)
 
                 try:
@@ -217,7 +224,7 @@ class AgentRunner:
                 )
                 if len(result_text) > _TRACE_TOOL_RESULT_MAX:
                     result_text = result_text[:_TRACE_TOOL_RESULT_MAX] + "… [truncated]"
-                trace.append({
+                await _emit({
                     "type": "tool_result",
                     "name": tool_name,
                     "content": result_text,

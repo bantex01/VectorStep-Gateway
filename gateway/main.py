@@ -218,6 +218,14 @@ async def rpc(ws: WebSocket):
                 thinking_level = params.get("thinkingLevel") or None
 
                 try:
+                    async def _send_trace_event(event: dict) -> None:
+                        await ws.send_json({
+                            "type": "res",
+                            "id": msg_id,
+                            "ok": True,
+                            "payload": {"status": "trace_event", "event": event},
+                        })
+
                     result = await runner.run(
                         agent=agent,
                         session_key=session_key,
@@ -226,6 +234,7 @@ async def rpc(ws: WebSocket):
                         thinking_level=thinking_level,
                         mcp_manager=mcp_manager,
                         limits=config.limits,
+                        on_trace_event=_send_trace_event,
                     )
 
                     # Derive provider name from the model string used
