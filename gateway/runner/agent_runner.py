@@ -21,6 +21,9 @@ from gateway.models.config import LimitsConfig
 logger = logging.getLogger(__name__)
 
 
+_TRACE_TOOL_RESULT_MAX = 3000  # chars — tool results can be huge (filesystem reads etc.)
+
+
 class AgentRunResult(BaseModel):
     text: str
     model_used: str
@@ -28,6 +31,7 @@ class AgentRunResult(BaseModel):
     tool_calls_made: int
     iterations: int
     usage: dict  # {"input_tokens": N, "output_tokens": N} accumulated across iterations
+    trace: list[dict] = []  # ordered agent execution trace — always captured
 
 
 class AgentRunError(Exception):
@@ -69,9 +73,14 @@ class AgentRunner:
         model_used = model_name
         total_input_tokens = 0
         total_output_tokens = 0
+        trace: list[dict] = []
 
         while True:
             # ── LLM call ──────────────────────────────────────────────
+            iterations += 1
+            trace.append({"type": "llm_call", "iteration": iterations})
+            logger.debug("Agent %s — LLM call #%d", agent.name, iterations)
+
             try:
                 response = await asyncio.wait_for(
                     provider.complete(
@@ -92,6 +101,18 @@ class AgentRunner:
             model_used = response.model_used
             total_input_tokens += response.usage.get("input_tokens", 0)
             total_output_tokens += response.usage.get("output_tokens", 0)
+
+            # ── Capture thinking and text blocks into trace ───────────
+            for block in response.content_blocks:
+                btype = block.get("type")
+                if btype == "thinking":
+                    content = block.get("thinking", "")
+                    trace.append({"type": "thinking", "content": content})
+                    logger.debug("Agent %s — thinking (%d chars)", agent.name, len(content))
+                elif btype == "text" and block.get("text"):
+                    content = block["text"]
+                    trace.append({"type": "text", "content": content})
+                    logger.debug("Agent %s — text output (%d chars)", agent.name, len(content))
 
             tool_use_blocks = [
                 b for b in response.content_blocks if b.get("type") == "tool_use"
@@ -114,6 +135,7 @@ class AgentRunner:
                         "input_tokens": total_input_tokens,
                         "output_tokens": total_output_tokens,
                     },
+                    trace=trace,
                 )
 
             # ── Append assistant message ───────────────────────────────
@@ -160,6 +182,9 @@ class AgentRunner:
                 tool_name = block["name"]
                 arguments: dict = block["input"]
 
+                trace.append({"type": "tool_call", "name": tool_name, "input": arguments})
+                logger.debug("Agent %s — tool call: %s %s", agent.name, tool_name, arguments)
+
                 try:
                     result = await asyncio.wait_for(
                         mcp_manager.call_tool(tool_name, arguments),
@@ -187,6 +212,22 @@ class AgentRunner:
                     )
                     logger.warning("Tool '%s' error: %s", tool_name, exc)
 
+                result_text = "\n".join(
+                    c.get("text", "") for c in result.content if c.get("type") == "text"
+                )
+                if len(result_text) > _TRACE_TOOL_RESULT_MAX:
+                    result_text = result_text[:_TRACE_TOOL_RESULT_MAX] + "… [truncated]"
+                trace.append({
+                    "type": "tool_result",
+                    "name": tool_name,
+                    "content": result_text,
+                    "is_error": result.is_error,
+                })
+                logger.debug(
+                    "Agent %s — tool result: %s (error=%s, %d chars)",
+                    agent.name, tool_name, result.is_error, len(result_text),
+                )
+
                 if is_openai_compat:
                     tool_results.append(mcp_result_to_openrouter(tool_use_id, result))
                 else:
@@ -200,7 +241,6 @@ class AgentRunner:
                 messages.append({"role": "user", "content": tool_results})
 
             # ── Iteration guard ───────────────────────────────────────
-            iterations += 1
             if iterations >= limits.max_agent_iterations:
                 raise AgentRunError(
                     f"max iterations exceeded: {limits.max_agent_iterations}"

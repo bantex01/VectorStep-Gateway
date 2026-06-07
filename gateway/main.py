@@ -261,6 +261,7 @@ async def rpc(ws: WebSocket):
                                     },
                                     "aborted": False,
                                 },
+                                "trace": result.trace,
                             },
                         },
                     })
