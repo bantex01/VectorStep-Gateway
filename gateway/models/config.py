@@ -46,6 +46,17 @@ class LoggingConfig(BaseModel):
     level: str = "INFO"
 
 
+class OtelConfig(BaseModel):
+    enabled: bool = False
+    exporter: str = "otlp"        # otlp | console
+    endpoint: str = "http://localhost:4318/v1/traces"
+    service_name: str = "pork-gateway"
+
+
+class ObservabilityConfig(BaseModel):
+    otel: OtelConfig = OtelConfig()
+
+
 class GatewayConfig(BaseModel):
     server: ServerConfig
     agents_dir: str = "./agents"
@@ -54,6 +65,7 @@ class GatewayConfig(BaseModel):
     mcp_servers: dict[str, MCPServerConfig] = {}
     providers: ProvidersConfig
     logging: LoggingConfig = LoggingConfig()
+    observability: ObservabilityConfig = ObservabilityConfig()
 
 
 def _resolve_env_vars(obj):

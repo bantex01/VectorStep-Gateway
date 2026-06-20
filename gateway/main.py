@@ -17,6 +17,7 @@ from gateway.models.agent import AgentConfig
 from gateway.models.config import GatewayConfig, load_config
 from gateway.runner.agent_runner import AgentRunError, AgentRunner
 from gateway.session.manager import SessionManager
+from gateway.tracing import extract_remote_context, setup_tracing, shutdown_tracing
 
 _state: dict = {}
 
@@ -30,6 +31,8 @@ async def lifespan(app: FastAPI):
         level=getattr(logging, config.logging.level.upper(), logging.INFO),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+
+    setup_tracing(config)
 
     auth_data = bootstrap_identity(config.identity)
     operator_token = get_operator_token(auth_data)
@@ -69,6 +72,7 @@ async def lifespan(app: FastAPI):
     yield
 
     await mcp_manager.stop_all()
+    shutdown_tracing()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -216,6 +220,7 @@ async def rpc(ws: WebSocket):
                 message_text = params.get("message", "")
                 model_override = params.get("model") or None
                 thinking_level = params.get("thinkingLevel") or None
+                remote_ctx = extract_remote_context(params)
 
                 try:
                     async def _send_trace_event(event: dict) -> None:
@@ -235,6 +240,7 @@ async def rpc(ws: WebSocket):
                         mcp_manager=mcp_manager,
                         limits=config.limits,
                         on_trace_event=_send_trace_event,
+                        remote_context=remote_ctx,
                     )
 
                     # Derive provider name from the model string used
