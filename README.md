@@ -17,12 +17,12 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # 2. Copy and edit the config template
-cp templates/config.yaml.example config.yaml
+cp samples/config.yaml.example config.yaml
 # Edit config.yaml — set your LLM provider keys and MCP servers
 
-# 3. Create your agents directory from the templates
-cp -r templates/agents ./agents
-# Edit agents/ to define your actual agents (model, tools, soul)
+# 3. Create your agents directory
+mkdir -p agents/my-agent
+# Add agent.yaml and soul.md — see Creating Agents below
 
 # 4. Set environment variables for any ${VAR_NAME} placeholders in config.yaml
 export ANTHROPIC_API_KEY=sk-ant-...
@@ -35,7 +35,7 @@ cat ~/.pork-gateway/identity/device-auth.json
 # Copy the 'operator' token — you'll need it for P-Ork's config
 ```
 
-Both `config.yaml` and `agents/` are gitignored — they contain personal credentials and environment-specific agent definitions. Use the files in `templates/` as your starting point.
+Both `config.yaml` and `agents/` are gitignored — they contain personal credentials and environment-specific agent definitions. Use `samples/config.yaml.example` as your starting point.
 
 ---
 
@@ -43,19 +43,16 @@ Both `config.yaml` and `agents/` are gitignored — they contain personal creden
 
 ```
 P-Ork-Gateway/
-├── templates/                        # Starting point — copy these, don't edit in place
-│   ├── config.yaml.example           # Config template with all options documented
-│   └── agents/
-│       ├── sre-triage/               # Example: SRE triage agent with tool access
-│       │   ├── agent.yaml
-│       │   └── soul.md
-│       └── generic-pipeline-step/    # Example: minimal pipeline step agent
-│           ├── agent.yaml
-│           └── soul.md
+├── samples/
+│   └── config.yaml.example           # Config template with all options documented
 ├── agents/                           # Your agent definitions (gitignored)
+│   └── <agent-name>/
+│       ├── agent.yaml
+│       └── soul.md
 ├── config.yaml                       # Your config (gitignored)
 ├── gateway/
 │   ├── main.py                       # FastAPI app, WebSocket endpoint, REST API
+│   ├── tracing.py                    # OpenTelemetry setup and W3C trace context extraction
 │   ├── auth/device.py                # Identity generation, token auth
 │   ├── agents/loader.py              # Agent YAML + soul.md loader, SIGHUP reload
 │   ├── session/manager.py            # Session key registry with prefix validation
@@ -73,7 +70,7 @@ P-Ork-Gateway/
 │   │       └── google.py             # Google Gemini via OpenAI-compat endpoint
 │   ├── runner/agent_runner.py        # Full agentic loop: LLM ↔ MCP tool calls
 │   └── models/
-│       ├── config.py                 # GatewayConfig, ProviderConfig, LimitsConfig
+│       ├── config.py                 # GatewayConfig, ProviderConfig, LimitsConfig, OtelConfig
 │       └── agent.py                  # AgentConfig Pydantic model
 └── requirements.txt
 ```
@@ -82,7 +79,7 @@ P-Ork-Gateway/
 
 ## Configuration (`config.yaml`)
 
-Copy `templates/config.yaml.example` to `config.yaml` and edit. Values support `${VAR_NAME}` environment variable substitution throughout.
+Copy `samples/config.yaml.example` to `config.yaml` and edit. Values support `${VAR_NAME}` environment variable substitution throughout.
 
 ### `server`
 
@@ -163,6 +160,48 @@ providers:
 | `ollama-cloud` | `https://ollama.com/api` | Native Ollama `/api/chat` endpoint |
 | `google` | `https://generativelanguage.googleapis.com/v1beta/openai` | OpenAI-compat |
 
+### `logging`
+
+| Field | Default | Description |
+|---|---|---|
+| `level` | `INFO` | Log level: `DEBUG`, `INFO`, `WARNING`, or `ERROR` |
+
+### `observability`
+
+Controls OpenTelemetry tracing. Disabled by default — all `tracer.start_as_current_span()` calls are no-ops until enabled.
+
+```yaml
+observability:
+  otel:
+    enabled: true
+    exporter: otlp                                        # otlp | console
+    endpoint: https://otlp-gateway-prod-eu-west-0.grafana.net/otlp/v1/traces
+    service_name: pork-gateway
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `enabled` | `false` | Enable OTel tracing |
+| `exporter` | `otlp` | `otlp` sends to an OTLP HTTP endpoint; `console` prints spans to stdout |
+| `endpoint` | `http://localhost:4318/v1/traces` | OTLP HTTP endpoint. For Grafana Cloud, use your region's OTLP gateway URL with a Basic Auth header set via `OTEL_EXPORTER_OTLP_HEADERS`. |
+| `service_name` | `pork-gateway` | `service.name` resource attribute on all spans |
+
+When OTel is enabled, the gateway emits three span types per agent run:
+
+| Span | Parent | Key attributes |
+|---|---|---|
+| `agent.run` | P-Ork `gen_ai.gateway` span (via W3C `traceparent`) | `agent.name`, `gen_ai.request.model`, `pork.gateway.iterations`, `pork.gateway.tool_calls`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` |
+| `llm_call` | `agent.run` | `llm_call.iteration`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` |
+| `tool_call <name>` | `agent.run` | `tool.name`, `tool.is_error` |
+
+P-Ork injects a W3C `traceparent` header into the agent WebSocket request params, and the gateway extracts it to make `agent.run` a child of P-Ork's pipeline span — giving you a single unified trace across both services in Grafana Tempo.
+
+**Grafana Cloud setup:**
+
+1. Get your OTLP endpoint from Grafana Cloud portal → Connections → OpenTelemetry
+2. Set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(instanceId:apiKey)>` in your environment
+3. Enable `observability.otel.enabled: true` and set `endpoint` to your Grafana Cloud OTLP URL
+
 ---
 
 ## Model Routing
@@ -213,8 +252,6 @@ Good soul files are:
 - **Explicit about output format** — tell the model to return JSON only, no preamble
 - **Clear on confidence scoring** — explain what high/low confidence means for this agent's task
 
-See `templates/agents/` for annotated examples.
-
 ### Hot Reload
 
 ```bash
@@ -245,7 +282,7 @@ Connect to `ws://<host>:<port>/rpc`.
 
 ### Agent Request
 
-The gateway sends **two frames** with the same request `id`:
+The gateway sends **multiple frames** with the same request `id`: one accepted frame immediately, zero or more streaming trace event frames during execution, then the final result frame.
 
 ```json
 // Client → Gateway
@@ -258,14 +295,20 @@ The gateway sends **two frames** with the same request `id`:
     "sessionKey": "agent:sre-triage:pipeline:run-123:triage",
     "message": "Assess this alert: ...",
     "model": "anthropic/claude-opus-4-8",    // optional — overrides agent.yaml default
-    "thinkingLevel": "medium"                // optional — Anthropic models only
+    "thinkingLevel": "medium",               // optional — Anthropic models only
+    "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"  // injected by P-Ork
   }
 }
 
 // Frame 1: accepted immediately (before agent runs)
 {"type": "res", "id": "uuid-2", "ok": true, "payload": {"status": "accepted", "runId": "uuid-3"}}
 
-// Frame 2: final result (after agent completes)
+// Frames 2..N: streaming trace events during execution (one per event)
+{"type": "res", "id": "uuid-2", "ok": true, "payload": {"status": "trace_event", "event": {"type": "llm_call", "iteration": 1}}}
+{"type": "res", "id": "uuid-2", "ok": true, "payload": {"status": "trace_event", "event": {"type": "tool_call", "name": "grafana_search", "input": {...}}}}
+{"type": "res", "id": "uuid-2", "ok": true, "payload": {"status": "trace_event", "event": {"type": "tool_result", "name": "grafana_search", "content": "...", "is_error": false}}}
+
+// Final frame: complete result
 {
   "type": "res",
   "id": "uuid-2",
@@ -282,13 +325,29 @@ The gateway sends **two frames** with the same request `id`:
           "usage": {"input_tokens": 1234, "output_tokens": 456}
         },
         "aborted": false
-      }
+      },
+      "trace": [
+        {"type": "llm_call", "iteration": 1},
+        {"type": "tool_call", "name": "grafana_search", "input": {...}},
+        {"type": "tool_result", "name": "grafana_search", "content": "...", "is_error": false},
+        {"type": "text", "content": "Agent response text here"}
+      ]
     }
   }
 }
 ```
 
-On error, frame 2 is: `{"type": "res", "id": "uuid-2", "ok": false, "error": {"message": "..."}}`
+On error, the final frame is: `{"type": "res", "id": "uuid-2", "ok": false, "error": {"message": "..."}}`
+
+### Trace Event Types
+
+| `type` | Fields | Description |
+|---|---|---|
+| `llm_call` | `iteration` | Start of an LLM call |
+| `thinking` | `content` | Extended thinking block (Anthropic only) |
+| `text` | `content` | Text output block from the LLM |
+| `tool_call` | `name`, `input` | Tool call about to be executed |
+| `tool_result` | `name`, `content`, `is_error` | Result returned from MCP tool |
 
 ### Session Keys
 
@@ -309,6 +368,7 @@ The P-Ork `gateway` executor generates a valid session key automatically if `ses
 |---|---|---|
 | `GET` | `/agents` | List loaded agents (name, model, tools) |
 | `GET` | `/agents/{name}/soul` | Return the soul.md content for an agent |
+| `GET` | `/agents/{name}/agent` | Return the agent.yaml content for an agent |
 | `POST` | `/reload` | Reload all agent configs from disk |
 | `GET` | `/mcp/tools` | List all tools across all MCP servers |
 | `GET` | `/mcp/servers` | List MCP server status (pid, tool count) |
@@ -329,6 +389,7 @@ The P-Ork `gateway` executor generates a valid session key automatically if `ses
 | `GRAFANA_TOKEN` | `mcp_servers.grafana` | Grafana service account token |
 | `TAVILY_API_KEY` | `mcp_servers.tavily` | Tavily web search API key |
 | `PORK_GATEWAY_CONFIG` | Gateway startup | Override config file path (default: `config.yaml`) |
+| `OTEL_EXPORTER_OTLP_HEADERS` | OTel exporter | Auth headers for OTLP endpoint (e.g. Grafana Cloud Basic Auth) |
 
 ---
 
@@ -377,6 +438,7 @@ Steps within the same P-Ork pipeline can freely mix `executor: openclaw` and `ex
 | Model routing | OpenClaw agent config | Gateway `providers:` config |
 | MCP tools | OpenClaw MCP servers | Gateway `mcp_servers:` config |
 | Thinking parameter | `thinking` | `thinkingLevel` |
+| OTel trace propagation | Not supported | Supported — joins P-Ork's trace |
 
 ---
 
