@@ -17,6 +17,7 @@ from gateway.models.agent import AgentConfig
 from gateway.models.config import GatewayConfig, load_config
 from gateway.runner.agent_runner import AgentRunError, AgentRunner
 from gateway.session.manager import SessionManager
+from gateway.metrics import metrics_response, set_build_info, update_mcp_server_status
 from gateway.tracing import extract_remote_context, setup_tracing, shutdown_tracing
 
 _state: dict = {}
@@ -42,6 +43,9 @@ async def lifespan(app: FastAPI):
 
     mcp_manager = MCPManager(config)
     await mcp_manager.start_all()
+    set_build_info(version="0.5.0")
+    for name, status in mcp_manager.get_server_status().items():
+        update_mcp_server_status(name, status["running"])
 
     llm_router = LLMRouter(config)
     agent_runner = AgentRunner(llm_router)
@@ -76,6 +80,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+@app.get("/metrics")
+async def get_metrics():
+    return metrics_response()
 
 
 @app.get("/agents")

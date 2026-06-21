@@ -1,5 +1,6 @@
 import logging
 from dataclasses import dataclass, field
+from gateway.metrics import update_session_count
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -25,6 +26,7 @@ class SessionManager:
                 agent_name=agent_name,
             )
             logger.debug("Created session: %s", session_key)
+            update_session_count(len(self._sessions))
         return self._sessions[session_key]
 
     def validate_key(self, session_key: str, agent_id: str) -> Optional[str]:

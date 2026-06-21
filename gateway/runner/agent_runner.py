@@ -17,6 +17,7 @@ from gateway.llm.tool_translator import (
     mcp_to_openrouter,
 )
 from gateway.mcp.manager import MCPManager, MCPToolResult
+from gateway.metrics import record_agent_run_complete, record_agent_run_start, record_tool_call
 from gateway.models.agent import AgentConfig
 from gateway.models.config import LimitsConfig
 from gateway.tracing import tracer
@@ -58,6 +59,7 @@ class AgentRunner:
         remote_context: otel_context.Context | None = None,
     ) -> AgentRunResult:
         start = time.monotonic()
+        record_agent_run_start()
 
         model_string = model_override or agent.model
         provider, model_name = self._router.get_provider_and_model(model_string)
@@ -88,206 +90,244 @@ class AgentRunner:
 
         parent_ctx = remote_context if remote_context is not None else otel_context.Context()
 
-        with tracer.start_as_current_span(
-            "agent.run",
-            context=parent_ctx,
-            attributes={
-                "agent.name": agent.name,
-                "pork.session_key": session_key,
-                "gen_ai.request.model": model_string,
-            },
-        ) as agent_span:
-            while True:
-                # ── LLM call ──────────────────────────────────────────────
-                iterations += 1
-                await _emit({"type": "llm_call", "iteration": iterations})
-                logger.debug("Agent %s — LLM call #%d", agent.name, iterations)
-
-                with tracer.start_as_current_span(
-                    "llm_call",
-                    attributes={
-                        "llm_call.iteration": iterations,
-                        "gen_ai.request.model": model_name,
-                    },
-                ) as llm_span:
-                    try:
-                        response = await asyncio.wait_for(
-                            provider.complete(
-                                system=agent.soul,
-                                messages=messages,
-                                tools=translated_tools,
-                                model=model_name,
-                                max_tokens=agent.max_tokens,
-                                thinking_level=thinking_level,
-                            ),
-                            timeout=float(limits.request_timeout_seconds),
-                        )
-                    except asyncio.TimeoutError:
-                        raise AgentRunError(
-                            f"LLM request timed out after {limits.request_timeout_seconds}s"
-                        )
-
-                    model_used = response.model_used
-                    in_tok = response.usage.get("input_tokens", 0)
-                    out_tok = response.usage.get("output_tokens", 0)
-                    total_input_tokens += in_tok
-                    total_output_tokens += out_tok
-                    llm_span.set_attribute("gen_ai.response.model", model_used)
-                    llm_span.set_attribute("gen_ai.usage.input_tokens", in_tok)
-                    llm_span.set_attribute("gen_ai.usage.output_tokens", out_tok)
-
-                # ── Capture thinking and text blocks into trace ───────────
-                for block in response.content_blocks:
-                    btype = block.get("type")
-                    if btype == "thinking":
-                        content = block.get("thinking", "")
-                        await _emit({"type": "thinking", "content": content})
-                        logger.debug("Agent %s — thinking (%d chars)", agent.name, len(content))
-                    elif btype == "text" and block.get("text"):
-                        content = block["text"]
-                        await _emit({"type": "text", "content": content})
-                        logger.debug("Agent %s — text output (%d chars)", agent.name, len(content))
-
-                tool_use_blocks = [
-                    b for b in response.content_blocks if b.get("type") == "tool_use"
-                ]
-
-                # ── No tool calls → final response ────────────────────────
-                if not tool_use_blocks or response.stop_reason not in ("tool_use", "tool_calls"):
-                    text = "\n".join(
-                        b["text"]
-                        for b in response.content_blocks
-                        if b.get("type") == "text" and b.get("text")
-                    )
-                    agent_span.set_attribute("gen_ai.response.model", model_used)
-                    agent_span.set_attribute("gen_ai.usage.input_tokens", total_input_tokens)
-                    agent_span.set_attribute("gen_ai.usage.output_tokens", total_output_tokens)
-                    agent_span.set_attribute("pork.gateway.iterations", iterations)
-                    agent_span.set_attribute("pork.gateway.tool_calls", tool_calls_made)
-                    return AgentRunResult(
-                        text=text,
-                        model_used=model_used,
-                        duration_ms=int((time.monotonic() - start) * 1000),
-                        tool_calls_made=tool_calls_made,
-                        iterations=iterations,
-                        usage={
-                            "input_tokens": total_input_tokens,
-                            "output_tokens": total_output_tokens,
-                        },
-                        trace=trace,
-                    )
-
-                # ── Append assistant message ───────────────────────────────
-                if is_openai_compat:
-                    text_content = "\n".join(
-                        b["text"]
-                        for b in response.content_blocks
-                        if b.get("type") == "text" and b.get("text")
-                    )
-                    tool_calls_field = [
-                        {
-                            "id": b["id"],
-                            "type": "function",
-                            "function": {
-                                "name": b["name"],
-                                "arguments": (
-                                    b["input"]
-                                    if isinstance(b["input"], str)
-                                    else json.dumps(b["input"])
-                                ),
-                            },
-                        }
-                        for b in tool_use_blocks
-                    ]
-                    assistant_msg: dict = {
-                        "role": "assistant",
-                        "content": text_content,
-                        "tool_calls": tool_calls_field,
-                    }
-                else:
-                    # Anthropic expects the raw content blocks (including thinking blocks)
-                    assistant_msg = {
-                        "role": "assistant",
-                        "content": response.content_blocks,
-                    }
-
-                messages.append(assistant_msg)
-
-                # ── Execute tool calls ────────────────────────────────────
-                tool_results: list[dict] = []
-                for block in tool_use_blocks:
-                    tool_calls_made += 1
-                    tool_use_id = block["id"]
-                    tool_name = block["name"]
-                    arguments: dict = block["input"]
-
-                    await _emit({"type": "tool_call", "name": tool_name, "input": arguments})
-                    logger.debug("Agent %s — tool call: %s %s", agent.name, tool_name, arguments)
+        run_status = "ok"
+        try:
+            with tracer.start_as_current_span(
+                "agent.run",
+                context=parent_ctx,
+                attributes={
+                    "agent.name": agent.name,
+                    "pork.session_key": session_key,
+                    "gen_ai.request.model": model_string,
+                },
+            ) as agent_span:
+                while True:
+                    # ── LLM call ──────────────────────────────────────────────
+                    iterations += 1
+                    await _emit({"type": "llm_call", "iteration": iterations})
+                    logger.debug("Agent %s — LLM call #%d", agent.name, iterations)
 
                     with tracer.start_as_current_span(
-                        f"tool_call {tool_name}",
-                        attributes={"tool.name": tool_name},
-                    ) as tool_span:
+                        "llm_call",
+                        attributes={
+                            "llm_call.iteration": iterations,
+                            "gen_ai.request.model": model_name,
+                        },
+                    ) as llm_span:
                         try:
-                            result = await asyncio.wait_for(
-                                mcp_manager.call_tool(tool_name, arguments),
-                                timeout=float(limits.mcp_tool_timeout_seconds),
+                            response = await asyncio.wait_for(
+                                provider.complete(
+                                    system=agent.soul,
+                                    messages=messages,
+                                    tools=translated_tools,
+                                    model=model_name,
+                                    max_tokens=agent.max_tokens,
+                                    thinking_level=thinking_level,
+                                ),
+                                timeout=float(limits.request_timeout_seconds),
                             )
-                            logger.info("Tool '%s' succeeded", tool_name)
-                            tool_span.set_attribute("tool.is_error", False)
                         except asyncio.TimeoutError:
-                            result = MCPToolResult(
-                                content=[
-                                    {
-                                        "type": "text",
-                                        "text": (
-                                            f"Tool '{tool_name}' timed out after "
-                                            f"{limits.mcp_tool_timeout_seconds}s"
-                                        ),
-                                    }
-                                ],
-                                is_error=True,
+                            raise AgentRunError(
+                                f"LLM request timed out after {limits.request_timeout_seconds}s"
                             )
-                            logger.warning("Tool '%s' timed out", tool_name)
-                            tool_span.set_attribute("tool.is_error", True)
-                        except Exception as exc:
-                            result = MCPToolResult(
-                                content=[{"type": "text", "text": f"Tool '{tool_name}' error: {exc}"}],
-                                is_error=True,
-                            )
-                            logger.warning("Tool '%s' error: %s", tool_name, exc)
-                            tool_span.set_attribute("tool.is_error", True)
 
-                    result_text = "\n".join(
-                        c.get("text", "") for c in result.content if c.get("type") == "text"
-                    )
-                    if len(result_text) > _TRACE_TOOL_RESULT_MAX:
-                        result_text = result_text[:_TRACE_TOOL_RESULT_MAX] + "… [truncated]"
-                    await _emit({
-                        "type": "tool_result",
-                        "name": tool_name,
-                        "content": result_text,
-                        "is_error": result.is_error,
-                    })
-                    logger.debug(
-                        "Agent %s — tool result: %s (error=%s, %d chars)",
-                        agent.name, tool_name, result.is_error, len(result_text),
-                    )
+                        model_used = response.model_used
+                        in_tok = response.usage.get("input_tokens", 0)
+                        out_tok = response.usage.get("output_tokens", 0)
+                        total_input_tokens += in_tok
+                        total_output_tokens += out_tok
+                        llm_span.set_attribute("gen_ai.response.model", model_used)
+                        llm_span.set_attribute("gen_ai.usage.input_tokens", in_tok)
+                        llm_span.set_attribute("gen_ai.usage.output_tokens", out_tok)
 
+                    # ── Capture thinking and text blocks into trace ───────────
+                    for block in response.content_blocks:
+                        btype = block.get("type")
+                        if btype == "thinking":
+                            content = block.get("thinking", "")
+                            await _emit({"type": "thinking", "content": content})
+                            logger.debug("Agent %s — thinking (%d chars)", agent.name, len(content))
+                        elif btype == "text" and block.get("text"):
+                            content = block["text"]
+                            await _emit({"type": "text", "content": content})
+                            logger.debug("Agent %s — text output (%d chars)", agent.name, len(content))
+
+                    tool_use_blocks = [
+                        b for b in response.content_blocks if b.get("type") == "tool_use"
+                    ]
+
+                    # ── No tool calls → final response ────────────────────────
+                    if not tool_use_blocks or response.stop_reason not in ("tool_use", "tool_calls"):
+                        text = "\n".join(
+                            b["text"]
+                            for b in response.content_blocks
+                            if b.get("type") == "text" and b.get("text")
+                        )
+                        agent_span.set_attribute("gen_ai.response.model", model_used)
+                        agent_span.set_attribute("gen_ai.usage.input_tokens", total_input_tokens)
+                        agent_span.set_attribute("gen_ai.usage.output_tokens", total_output_tokens)
+                        agent_span.set_attribute("pork.gateway.iterations", iterations)
+                        agent_span.set_attribute("pork.gateway.tool_calls", tool_calls_made)
+                        run_status = "ok"
+                        return AgentRunResult(
+                            text=text,
+                            model_used=model_used,
+                            duration_ms=int((time.monotonic() - start) * 1000),
+                            tool_calls_made=tool_calls_made,
+                            iterations=iterations,
+                            usage={
+                                "input_tokens": total_input_tokens,
+                                "output_tokens": total_output_tokens,
+                            },
+                            trace=trace,
+                        )
+
+                    # ── Append assistant message ───────────────────────────────
                     if is_openai_compat:
-                        tool_results.append(mcp_result_to_openrouter(tool_use_id, result))
+                        text_content = "\n".join(
+                            b["text"]
+                            for b in response.content_blocks
+                            if b.get("type") == "text" and b.get("text")
+                        )
+                        tool_calls_field = [
+                            {
+                                "id": b["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": b["name"],
+                                    "arguments": (
+                                        b["input"]
+                                        if isinstance(b["input"], str)
+                                        else json.dumps(b["input"])
+                                    ),
+                                },
+                            }
+                            for b in tool_use_blocks
+                        ]
+                        assistant_msg: dict = {
+                            "role": "assistant",
+                            "content": text_content,
+                            "tool_calls": tool_calls_field,
+                        }
                     else:
-                        tool_results.append(mcp_result_to_anthropic(tool_use_id, result))
+                        # Anthropic expects the raw content blocks (including thinking blocks)
+                        assistant_msg = {
+                            "role": "assistant",
+                            "content": response.content_blocks,
+                        }
 
-                # Append tool results (Anthropic: batched in one user message;
-                # OpenRouter: individual tool messages)
-                if is_openai_compat:
-                    messages.extend(tool_results)
-                else:
-                    messages.append({"role": "user", "content": tool_results})
+                    messages.append(assistant_msg)
 
-                # ── Iteration guard ───────────────────────────────────────
-                if iterations >= limits.max_agent_iterations:
-                    raise AgentRunError(
-                        f"max iterations exceeded: {limits.max_agent_iterations}"
-                    )
+                    # ── Execute tool calls ────────────────────────────────────
+                    tool_results: list[dict] = []
+                    for block in tool_use_blocks:
+                        tool_calls_made += 1
+                        tool_use_id = block["id"]
+                        tool_name = block["name"]
+                        arguments: dict = block["input"]
+
+                        await _emit({"type": "tool_call", "name": tool_name, "input": arguments})
+                        logger.debug("Agent %s — tool call: %s %s", agent.name, tool_name, arguments)
+
+                        tool_start = time.monotonic()
+                        tool_result_str = "success"
+                        with tracer.start_as_current_span(
+                            f"tool_call {tool_name}",
+                            attributes={"tool.name": tool_name},
+                        ) as tool_span:
+                            try:
+                                result = await asyncio.wait_for(
+                                    mcp_manager.call_tool(tool_name, arguments),
+                                    timeout=float(limits.mcp_tool_timeout_seconds),
+                                )
+                                logger.info("Tool '%s' succeeded", tool_name)
+                                tool_span.set_attribute("tool.is_error", False)
+                            except asyncio.TimeoutError:
+                                result = MCPToolResult(
+                                    content=[
+                                        {
+                                            "type": "text",
+                                            "text": (
+                                                f"Tool '{tool_name}' timed out after "
+                                                f"{limits.mcp_tool_timeout_seconds}s"
+                                            ),
+                                        }
+                                    ],
+                                    is_error=True,
+                                )
+                                tool_result_str = "timeout"
+                                logger.warning("Tool '%s' timed out", tool_name)
+                                tool_span.set_attribute("tool.is_error", True)
+                            except Exception as exc:
+                                result = MCPToolResult(
+                                    content=[{"type": "text", "text": f"Tool '{tool_name}' error: {exc}"}],
+                                    is_error=True,
+                                )
+                                tool_result_str = "error"
+                                logger.warning("Tool '%s' error: %s", tool_name, exc)
+                                tool_span.set_attribute("tool.is_error", True)
+
+                        result_text = "\n".join(
+                            c.get("text", "") for c in result.content if c.get("type") == "text"
+                        )
+                        if len(result_text) > _TRACE_TOOL_RESULT_MAX:
+                            result_text = result_text[:_TRACE_TOOL_RESULT_MAX] + "… [truncated]"
+                        await _emit({
+                            "type": "tool_result",
+                            "name": tool_name,
+                            "content": result_text,
+                            "is_error": result.is_error,
+                        })
+                        logger.debug(
+                            "Agent %s — tool result: %s (error=%s, %d chars)",
+                            agent.name, tool_name, result.is_error, len(result_text),
+                        )
+
+                        server_name = mcp_manager.get_server_for_tool(tool_name) or "unknown"
+                        record_tool_call(
+                            mcp_server=server_name,
+                            tool=tool_name,
+                            result=tool_result_str,
+                            duration_s=time.monotonic() - tool_start,
+                        )
+
+                        if is_openai_compat:
+                            tool_results.append(mcp_result_to_openrouter(tool_use_id, result))
+                        else:
+                            tool_results.append(mcp_result_to_anthropic(tool_use_id, result))
+
+                    # Append tool results (Anthropic: batched in one user message;
+                    # OpenRouter: individual tool messages)
+                    if is_openai_compat:
+                        messages.extend(tool_results)
+                    else:
+                        messages.append({"role": "user", "content": tool_results})
+
+                    # ── Iteration guard ───────────────────────────────────────
+                    if iterations >= limits.max_agent_iterations:
+                        raise AgentRunError(
+                            f"max iterations exceeded: {limits.max_agent_iterations}"
+                        )
+        except AgentRunError as exc:
+            err_msg = str(exc)
+            if "timed out" in err_msg:
+                run_status = "timeout"
+            elif "max iterations" in err_msg:
+                run_status = "max_iterations"
+            else:
+                run_status = "error"
+            raise
+        except Exception:
+            run_status = "error"
+            raise
+        finally:
+            record_agent_run_complete(
+                agent=agent.name,
+                model=model_used,
+                status=run_status,
+                duration_s=time.monotonic() - start,
+                iterations=iterations,
+                tool_calls=tool_calls_made,
+                input_tokens=total_input_tokens,
+                output_tokens=total_output_tokens,
+            )

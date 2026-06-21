@@ -372,6 +372,61 @@ The P-Ork `gateway` executor generates a valid session key automatically if `ses
 | `POST` | `/reload` | Reload all agent configs from disk |
 | `GET` | `/mcp/tools` | List all tools across all MCP servers |
 | `GET` | `/mcp/servers` | List MCP server status (pid, tool count) |
+| `GET` | `/metrics` | Prometheus metrics (no auth required) |
+
+---
+
+## Prometheus Metrics
+
+The gateway exposes Prometheus-format metrics at `/metrics` (GET). No authentication is required — Prometheus scrapers connect directly.
+
+### Example Prometheus scrape config
+
+```yaml
+scrape_configs:
+  - job_name: pork-gateway
+    static_configs:
+      - targets: ["localhost:18780"]
+```
+
+### Exposed metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `pork_gateway_agent_runs_total` | Counter | `agent`, `model`, `status` | Total agent runs by agent, model, and terminal status (`ok`/`error`/`timeout`/`max_iterations`) |
+| `pork_gateway_agent_runs_in_progress` | Gauge | — | Currently executing agent runs |
+| `pork_gateway_agent_run_duration_seconds` | Histogram | `agent` | Agent run wall-clock duration in seconds |
+| `pork_gateway_agent_iterations` | Histogram | `agent` | Number of LLM iterations per agent run |
+| `pork_gateway_agent_tool_calls_total` | Counter | `agent` | Total tool calls made during agent runs |
+| `pork_gateway_llm_tokens_total` | Counter | `agent`, `model`, `direction` | Total LLM tokens consumed (`direction`: `input`/`output`) |
+| `pork_gateway_tool_calls_total` | Counter | `mcp_server`, `tool`, `result` | Total MCP tool calls by server, tool, and result (`success`/`error`/`timeout`) |
+| `pork_gateway_tool_call_duration_seconds` | Histogram | `mcp_server` | MCP tool call duration in seconds |
+| `pork_gateway_mcp_servers_running` | Gauge | `mcp_server` | 1 if MCP server is running, 0 otherwise |
+| `pork_gateway_mcp_restarts_total` | Counter | `mcp_server` | Total MCP server restarts |
+| `pork_gateway_sessions_active` | Gauge | — | Number of active sessions |
+| `pork_gateway_info` | Info | `version` | Build information |
+
+### Example PromQL queries
+
+```promql
+# Agent run success rate (last 5 minutes)
+rate(pork_gateway_agent_runs_total{status="ok"}[5m])
+  / rate(pork_gateway_agent_runs_total[5m])
+
+# Average agent run duration by agent
+rate(pork_gateway_agent_run_duration_seconds_sum[5m])
+  / rate(pork_gateway_agent_run_duration_seconds_count[5m])
+
+# MCP tool error rate by server
+rate(pork_gateway_tool_calls_total{result="error"}[5m])
+  / rate(pork_gateway_tool_calls_total[5m])
+
+# Currently running agents
+pork_gateway_agent_runs_in_progress
+
+# Active sessions
+pork_gateway_sessions_active
+```
 
 ---
 

@@ -6,6 +6,7 @@ import logging
 from pydantic import BaseModel
 
 from gateway.mcp.transport import MCPTransport
+from gateway.metrics import record_mcp_restart, update_mcp_server_status
 from gateway.models.agent import AgentConfig
 from gateway.models.config import GatewayConfig, MCPServerConfig
 
@@ -77,6 +78,8 @@ class MCPManager:
             )
 
     async def stop_all(self) -> None:
+        for name in self._servers:
+            update_mcp_server_status(name, False)
         for state in self._servers.values():
             if state._monitor_task and not state._monitor_task.done():
                 state._monitor_task.cancel()
@@ -129,6 +132,10 @@ class MCPManager:
             }
             for name, state in self._servers.items()
         }
+
+    def get_server_for_tool(self, tool_name: str) -> str | None:
+        tool = self._tools.get(tool_name)
+        return tool.server_name if tool else None
 
     def get_all_tools(self) -> dict[str, list[dict]]:
         """Return tools grouped by server, formatted for the HTTP endpoint."""
@@ -212,6 +219,7 @@ class MCPManager:
                         if v.server_name != state.name
                     }
                     state.restart_count += 1
+                    record_mcp_restart(state.name)
                     ok = await self._spawn_and_init(state)
                     if ok:
                         logger.info(
@@ -219,6 +227,7 @@ class MCPManager:
                             state.name,
                             state.restart_count,
                         )
+                        update_mcp_server_status(state.name, True)
                     else:
                         logger.error(
                             "MCP server '%s' failed to restart; will retry",
