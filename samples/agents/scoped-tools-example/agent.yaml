@@ -1,0 +1,9 @@
+name: scoped-tools-example
+model: anthropic/claude-sonnet-4-6
+max_tokens: 8192
+tools:
+  - filesystem                                 # bare server name → every tool it exposes
+  - grafana: [search_dashboards, query_loki]   # {server: [tool, ...]} → only these tools
+  - tavily                                     # unscoped entries can be mixed in freely
+  # ^ tool names above are illustrative — check the exact names a server exposes via
+  # `GET /mcp/tools` on the gateway before copying this into a real agent.
