@@ -218,10 +218,9 @@ class AgentRunner:
 
                     messages.append(assistant_msg)
 
-                    # ── Execute tool calls ────────────────────────────────────
-                    tool_results: list[dict] = []
-                    for block in tool_use_blocks:
-                        tool_calls_made += 1
+                    # ── Execute tool calls (concurrently — independent tool_use
+                    # blocks in one turn don't need to wait on each other) ─────
+                    async def _execute_tool_call(block: dict) -> dict:
                         tool_use_id = block["id"]
                         tool_name = block["name"]
                         arguments: dict = block["input"]
@@ -292,9 +291,16 @@ class AgentRunner:
                         )
 
                         if is_openai_compat:
-                            tool_results.append(mcp_result_to_openrouter(tool_use_id, result))
+                            return mcp_result_to_openrouter(tool_use_id, result)
                         else:
-                            tool_results.append(mcp_result_to_anthropic(tool_use_id, result))
+                            return mcp_result_to_anthropic(tool_use_id, result)
+
+                    tool_calls_made += len(tool_use_blocks)
+                    # gather() preserves input order in its results regardless of
+                    # completion order, so message ordering stays deterministic.
+                    tool_results: list[dict] = list(
+                        await asyncio.gather(*(_execute_tool_call(b) for b in tool_use_blocks))
+                    )
 
                     # Append tool results (Anthropic: batched in one user message;
                     # OpenRouter: individual tool messages)

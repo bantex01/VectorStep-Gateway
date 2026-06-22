@@ -34,11 +34,23 @@ class AnthropicProvider(BaseProvider):
         kwargs: dict = {
             "model": model,
             "max_tokens": max_tokens,
-            "system": system,
+            # Cache the (typically large, unchanging) soul prompt so it's only
+            # re-billed as input tokens when its content actually changes.
+            "system": [
+                {
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
             "messages": messages,
         }
 
         if tools:
+            # Marking the last tool definition as a cache breakpoint caches the
+            # entire tools array prefix, since Anthropic caching is prefix-based.
+            tools = [dict(t) for t in tools]
+            tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
             kwargs["tools"] = tools
 
         budget = _THINKING_BUDGET.get(thinking_level or "off")

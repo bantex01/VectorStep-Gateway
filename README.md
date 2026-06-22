@@ -497,6 +497,19 @@ Steps within the same P-Ork pipeline can freely mix `executor: openclaw` and `ex
 
 ---
 
+## Performance Notes
+
+- **Anthropic prompt caching** — the `soul` system prompt and tool-schema list are sent with
+  `cache_control: {"type": "ephemeral"}` (`gateway/llm/providers/anthropic.py`), so on multi-turn
+  loops the unchanged prefix is served from Anthropic's cache instead of being re-billed as full
+  input tokens on every iteration. Anthropic-only — OpenAI-compat providers don't expose this.
+- **Parallel tool execution** — when an LLM turn requests multiple tools at once, the gateway
+  runs them concurrently with `asyncio.gather` instead of one at a time
+  (`gateway/runner/agent_runner.py`), so the turn waits for the slowest tool call rather than the
+  sum of all of them.
+
+---
+
 ## MCP Transport Notes
 
 The gateway spawns each MCP server as a subprocess and communicates over stdio (JSON-RPC 2.0). The subprocess `stdout` stream is read with a 4MB line limit — sufficient for even large tool response payloads. If an MCP server fails to start, the gateway logs an error and continues; agents that list that server in their `tools:` will have no tools from it for that session.
