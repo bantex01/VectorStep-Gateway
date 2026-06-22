@@ -54,7 +54,8 @@ class OpenRouterProvider(BaseProvider):
                 data = resp.json()
         except httpx.HTTPStatusError as exc:
             raise ProviderError(
-                f"OpenRouter HTTP {exc.response.status_code}: {exc.response.text}"
+                f"OpenRouter HTTP {exc.response.status_code}: {exc.response.text}",
+                status_code=exc.response.status_code,
             ) from exc
         except httpx.RequestError as exc:
             raise ProviderError(f"OpenRouter request error: {exc}") from exc

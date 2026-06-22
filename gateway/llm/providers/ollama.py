@@ -55,7 +55,8 @@ class OllamaProvider(BaseProvider):
                 data = resp.json()
         except httpx.HTTPStatusError as exc:
             raise ProviderError(
-                f"Ollama HTTP {exc.response.status_code}: {exc.response.text}"
+                f"Ollama HTTP {exc.response.status_code}: {exc.response.text}",
+                status_code=exc.response.status_code,
             ) from exc
         except httpx.RequestError as exc:
             raise ProviderError(f"Ollama request error: {exc}") from exc
@@ -193,7 +194,8 @@ class OllamaCloudProvider(BaseProvider):
                 data = resp.json()
         except httpx.HTTPStatusError as exc:
             raise ProviderError(
-                f"Ollama Cloud HTTP {exc.response.status_code}: {exc.response.text}"
+                f"Ollama Cloud HTTP {exc.response.status_code}: {exc.response.text}",
+                status_code=exc.response.status_code,
             ) from exc
         except httpx.RequestError as exc:
             raise ProviderError(f"Ollama Cloud request error: {exc}") from exc

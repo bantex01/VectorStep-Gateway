@@ -61,7 +61,10 @@ class AnthropicProvider(BaseProvider):
         try:
             response = await self._client.messages.create(**kwargs)
         except APIError as exc:
-            raise ProviderError(f"Anthropic API error: {exc}") from exc
+            raise ProviderError(
+                f"Anthropic API error: {exc}",
+                status_code=getattr(exc, "status_code", None),
+            ) from exc
 
         content_blocks = [block.model_dump() for block in response.content]
 

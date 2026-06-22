@@ -9,6 +9,7 @@ from opentelemetry import context as otel_context
 from opentelemetry import trace
 from pydantic import BaseModel
 
+from gateway.llm.providers.base import ProviderError
 from gateway.llm.router import LLMRouter
 from gateway.llm.tool_translator import (
     mcp_result_to_anthropic,
@@ -26,6 +27,21 @@ logger = logging.getLogger(__name__)
 
 
 _TRACE_TOOL_RESULT_MAX = 3000  # chars — tool results can be huge (filesystem reads etc.)
+
+# HTTP statuses worth retrying/falling back on. None (connection-level errors with
+# no status code, e.g. DNS/refused-connection/Anthropic APIConnectionError) is
+# treated as retryable too — see _call_llm.
+_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504, 529}
+
+
+def _dedupe_preserve_order(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
 
 
 class AgentRunResult(BaseModel):
@@ -62,22 +78,25 @@ class AgentRunner:
         record_agent_run_start()
 
         model_string = model_override or agent.model
-        provider, model_name = self._router.get_provider_and_model(model_string)
-        is_openai_compat = model_string.startswith(("openrouter/", "ollama/", "ollama-cloud/", "google/"))
+        # Models to try in order for this run: the requested one, then
+        # agent.yaml's model_fallbacks. Once a candidate succeeds, later
+        # iterations in this same run try it first (no flapping back to a
+        # model that already failed).
+        candidate_model_strings = _dedupe_preserve_order([model_string, *agent.model_fallbacks])
+        candidate_index = 0
 
-        # Resolve tools for this agent and translate to provider format
+        # Resolve tools for this agent once, pre-translated to both provider
+        # formats — which one is used depends on which candidate model ends
+        # up serving the request.
         mcp_tools = mcp_manager.get_tools_for_agent(agent)
-        if mcp_tools:
-            translated_tools = (
-                mcp_to_openrouter(mcp_tools) if is_openai_compat else mcp_to_anthropic(mcp_tools)
-            )
-        else:
-            translated_tools = None
+        anthropic_tools = mcp_to_anthropic(mcp_tools) if mcp_tools else None
+        openai_tools = mcp_to_openrouter(mcp_tools) if mcp_tools else None
 
         messages: list[dict] = [{"role": "user", "content": message}]
         iterations = 0
         tool_calls_made = 0
-        model_used = model_name
+        model_used = model_string
+        is_openai_compat = False
         total_input_tokens = 0
         total_output_tokens = 0
         trace: list[dict] = []
@@ -87,6 +106,114 @@ class AgentRunner:
             trace.append(event)
             if on_trace_event is not None:
                 await on_trace_event(event)
+
+        async def _call_llm():
+            """Call the LLM for the current iteration.
+
+            Retries transient errors (429/5xx/529/timeouts/connection errors) on
+            the same model with exponential backoff; once a candidate's retries
+            are exhausted, falls over to the next entry in candidate_model_strings.
+            Mutates model_string/model_used/is_openai_compat and candidate_index
+            (via nonlocal) to reflect whichever candidate actually succeeds.
+            """
+            nonlocal candidate_index, model_string, model_used, is_openai_compat
+            last_exc: Exception | None = None
+
+            while candidate_index < len(candidate_model_strings):
+                candidate_string = candidate_model_strings[candidate_index]
+                candidate_provider, candidate_model_name = self._router.get_provider_and_model(
+                    candidate_string
+                )
+                candidate_is_openai_compat = candidate_string.startswith(
+                    ("openrouter/", "ollama/", "ollama-cloud/", "google/")
+                )
+                candidate_tools = openai_tools if candidate_is_openai_compat else anthropic_tools
+
+                for attempt in range(limits.llm_retry_attempts + 1):
+                    with tracer.start_as_current_span(
+                        "llm_call",
+                        attributes={
+                            "llm_call.iteration": iterations,
+                            "llm_call.attempt": attempt + 1,
+                            "gen_ai.request.model": candidate_model_name,
+                        },
+                    ) as llm_span:
+                        try:
+                            response = await asyncio.wait_for(
+                                candidate_provider.complete(
+                                    system=agent.soul,
+                                    messages=messages,
+                                    tools=candidate_tools,
+                                    model=candidate_model_name,
+                                    max_tokens=agent.max_tokens,
+                                    thinking_level=thinking_level,
+                                ),
+                                timeout=float(limits.request_timeout_seconds),
+                            )
+                        except asyncio.TimeoutError:
+                            last_exc = AgentRunError(
+                                f"LLM request to {candidate_string} timed out after "
+                                f"{limits.request_timeout_seconds}s"
+                            )
+                            retryable = True
+                        except ProviderError as exc:
+                            last_exc = exc
+                            retryable = (
+                                exc.status_code is None
+                                or exc.status_code in _RETRYABLE_STATUS_CODES
+                            )
+                        else:
+                            model_string = candidate_string
+                            model_used = response.model_used
+                            is_openai_compat = candidate_is_openai_compat
+                            llm_span.set_attribute("gen_ai.response.model", model_used)
+                            llm_span.set_attribute(
+                                "gen_ai.usage.input_tokens", response.usage.get("input_tokens", 0)
+                            )
+                            llm_span.set_attribute(
+                                "gen_ai.usage.output_tokens",
+                                response.usage.get("output_tokens", 0),
+                            )
+                            return response
+
+                        llm_span.set_attribute("llm_call.error", str(last_exc))
+                        llm_span.set_attribute("llm_call.retryable", retryable)
+
+                    if retryable and attempt < limits.llm_retry_attempts:
+                        delay = limits.llm_retry_base_delay_seconds * (2 ** attempt)
+                        await _emit({
+                            "type": "llm_retry",
+                            "model": candidate_string,
+                            "attempt": attempt + 1,
+                            "delay_seconds": delay,
+                            "error": str(last_exc),
+                        })
+                        logger.warning(
+                            "Agent %s — retryable error on %s (attempt %d/%d): %s — retrying in %.1fs",
+                            agent.name, candidate_string, attempt + 1,
+                            limits.llm_retry_attempts + 1, last_exc, delay,
+                        )
+                        await asyncio.sleep(delay)
+                    else:
+                        break  # give up on this candidate — fall over below
+
+                candidate_index += 1
+                if candidate_index < len(candidate_model_strings):
+                    next_model = candidate_model_strings[candidate_index]
+                    await _emit({
+                        "type": "model_fallback",
+                        "from_model": candidate_string,
+                        "to_model": next_model,
+                        "error": str(last_exc),
+                    })
+                    logger.warning(
+                        "Agent %s — falling back from %s to %s: %s",
+                        agent.name, candidate_string, next_model, last_exc,
+                    )
+
+            raise AgentRunError(
+                f"All models exhausted ({', '.join(candidate_model_strings)}): {last_exc}"
+            )
 
         parent_ctx = remote_context if remote_context is not None else otel_context.Context()
 
@@ -107,38 +234,9 @@ class AgentRunner:
                     await _emit({"type": "llm_call", "iteration": iterations})
                     logger.debug("Agent %s — LLM call #%d", agent.name, iterations)
 
-                    with tracer.start_as_current_span(
-                        "llm_call",
-                        attributes={
-                            "llm_call.iteration": iterations,
-                            "gen_ai.request.model": model_name,
-                        },
-                    ) as llm_span:
-                        try:
-                            response = await asyncio.wait_for(
-                                provider.complete(
-                                    system=agent.soul,
-                                    messages=messages,
-                                    tools=translated_tools,
-                                    model=model_name,
-                                    max_tokens=agent.max_tokens,
-                                    thinking_level=thinking_level,
-                                ),
-                                timeout=float(limits.request_timeout_seconds),
-                            )
-                        except asyncio.TimeoutError:
-                            raise AgentRunError(
-                                f"LLM request timed out after {limits.request_timeout_seconds}s"
-                            )
-
-                        model_used = response.model_used
-                        in_tok = response.usage.get("input_tokens", 0)
-                        out_tok = response.usage.get("output_tokens", 0)
-                        total_input_tokens += in_tok
-                        total_output_tokens += out_tok
-                        llm_span.set_attribute("gen_ai.response.model", model_used)
-                        llm_span.set_attribute("gen_ai.usage.input_tokens", in_tok)
-                        llm_span.set_attribute("gen_ai.usage.output_tokens", out_tok)
+                    response = await _call_llm()
+                    total_input_tokens += response.usage.get("input_tokens", 0)
+                    total_output_tokens += response.usage.get("output_tokens", 0)
 
                     # ── Capture thinking and text blocks into trace ───────────
                     for block in response.content_blocks:

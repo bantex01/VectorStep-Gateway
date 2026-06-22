@@ -103,6 +103,8 @@ The operator token (used by P-Ork to authenticate) is written to `<path>/device-
 | `max_agent_iterations` | `20` | Max LLM ↔ tool call loops before aborting a run |
 | `request_timeout_seconds` | `180` | Timeout for a single LLM API call |
 | `mcp_tool_timeout_seconds` | `30` | Timeout for a single MCP tool call |
+| `llm_retry_attempts` | `2` | Retries on the *same* model after a retryable error (429/5xx/529/timeout/connection error) before falling over to the next entry in `model_fallbacks` |
+| `llm_retry_base_delay_seconds` | `1.0` | Base delay for exponential backoff between retries (doubles each attempt: 1s, 2s, 4s, …) |
 
 ### `mcp_servers`
 
@@ -191,7 +193,7 @@ When OTel is enabled, the gateway emits three span types per agent run:
 | Span | Parent | Key attributes |
 |---|---|---|
 | `agent.run` | P-Ork `gen_ai.gateway` span (via W3C `traceparent`) | `agent.name`, `gen_ai.request.model`, `pork.gateway.iterations`, `pork.gateway.tool_calls`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` |
-| `llm_call` | `agent.run` | `llm_call.iteration`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` |
+| `llm_call` | `agent.run` | `llm_call.iteration`, `llm_call.attempt`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `llm_call.error`/`llm_call.retryable` (failed attempts only) |
 | `tool_call <name>` | `agent.run` | `tool.name`, `tool.is_error` |
 
 P-Ork injects a W3C `traceparent` header into the agent WebSocket request params, and the gateway extracts it to make `agent.run` a child of P-Ork's pipeline span — giving you a single unified trace across both services in Grafana Tempo.
@@ -240,8 +242,39 @@ tools:                    # MCP server names from mcp_servers config
 |---|---|---|
 | `name` | Yes | Agent identifier. Must match the directory name. Referenced as `agentId` in requests. |
 | `model` | Yes | Default model string. Can be overridden per-request via `executor_config.model` in P-Ork. |
+| `model_fallbacks` | No | List of model strings to try, in order, if `model` exhausts its retries (see `limits.llm_retry_attempts`). Once a fallback succeeds, later iterations in the same run try it first. |
 | `max_tokens` | Yes | Max output tokens per LLM call. |
-| `tools` | No | MCP server names. The agent gets all tools from each listed server. Omit or leave empty for no tool access. |
+| `tools` | No | MCP server names, optionally scoped to specific tools (see below). Omit or leave empty for no tool access. |
+
+```yaml
+name: sre-triage
+model: anthropic/claude-sonnet-4-6
+model_fallbacks:
+  - anthropic/claude-haiku-4-5
+  - openrouter/deepseek/deepseek-chat
+max_tokens: 8192
+```
+
+If `anthropic/claude-sonnet-4-6` returns a retryable error (e.g. `529 overloaded`), the gateway
+retries it `llm_retry_attempts` times with exponential backoff, then falls over to
+`claude-haiku-4-5`, then to the OpenRouter model if that also fails. Non-retryable errors (e.g.
+`400`/`401`) skip the retry and fall over immediately.
+
+#### Scoping `tools:` to specific tools
+
+By default, listing an MCP server name in `tools:` grants every tool that server exposes. To
+shrink the schema bloat in context (and the capability surface) for servers that expose dozens of
+tools, scope an entry down to a `{server_name: [tool_a, tool_b]}` mapping instead of a bare name:
+
+```yaml
+tools:
+  - filesystem                                    # every tool from filesystem
+  - atlassian: [jira_search, jira_get_issue]       # only these two from atlassian
+```
+
+Tool names here are the unscoped MCP tool names (e.g. `jira_search`), not the namespaced
+`server__tool` form used internally — check `GET /mcp/tools` for the exact names a server
+exposes. Mixing scoped and unscoped entries in the same list is fine.
 
 ### `soul.md`
 
@@ -344,6 +377,8 @@ On error, the final frame is: `{"type": "res", "id": "uuid-2", "ok": false, "err
 | `type` | Fields | Description |
 |---|---|---|
 | `llm_call` | `iteration` | Start of an LLM call |
+| `llm_retry` | `model`, `attempt`, `delay_seconds`, `error` | A retryable error occurred; retrying the same model after a backoff delay |
+| `model_fallback` | `from_model`, `to_model`, `error` | Retries on `from_model` were exhausted; falling over to `to_model` |
 | `thinking` | `content` | Extended thinking block (Anthropic only) |
 | `text` | `content` | Text output block from the LLM |
 | `tool_call` | `name`, `input` | Tool call about to be executed |
@@ -507,6 +542,11 @@ Steps within the same P-Ork pipeline can freely mix `executor: openclaw` and `ex
   runs them concurrently with `asyncio.gather` instead of one at a time
   (`gateway/runner/agent_runner.py`), so the turn waits for the slowest tool call rather than the
   sum of all of them.
+- **Model fallback chains + retry with backoff** — a retryable error (429/5xx/529/timeout/
+  connection error) is retried on the same model with exponential backoff
+  (`limits.llm_retry_attempts`/`llm_retry_base_delay_seconds`); once exhausted, the gateway falls
+  over to the next model in the agent's `model_fallbacks` list. Non-retryable errors (e.g.
+  `400`/`401`) skip straight to fallover. See `llm_retry`/`model_fallback` trace events above.
 
 ---
 

@@ -10,6 +10,8 @@ class LimitsConfig(BaseModel):
     max_agent_iterations: int = 20
     request_timeout_seconds: int = 180
     mcp_tool_timeout_seconds: int = 30
+    llm_retry_attempts: int = 2          # retries on the *same* model before falling over
+    llm_retry_base_delay_seconds: float = 1.0  # doubles each attempt (exponential backoff)
 
 
 class ServerConfig(BaseModel):

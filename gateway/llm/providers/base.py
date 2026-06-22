@@ -13,7 +13,16 @@ class ProviderResponse(BaseModel):
 
 
 class ProviderError(Exception):
-    pass
+    """Raised when a provider API call fails.
+
+    status_code is the HTTP status code if known (None for connection-level
+    failures like DNS/refused-connection errors) — used by the agent runner to
+    decide whether an error is worth retrying/falling back on.
+    """
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class BaseProvider(ABC):
