@@ -5,7 +5,12 @@ import logging
 
 import httpx
 
-from gateway.llm.providers.base import BaseProvider, ProviderError, ProviderResponse
+from gateway.llm.providers.base import (
+    BaseProvider,
+    ProviderError,
+    ProviderResponse,
+    raise_if_error_envelope,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +20,10 @@ _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 class OpenRouterProvider(BaseProvider):
     def __init__(self, api_key: str, timeout: float = 180.0) -> None:
         self._api_key = api_key
-        self._timeout = timeout
+        self._client = httpx.AsyncClient(timeout=timeout)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
 
     async def complete(
         self,
@@ -48,10 +56,9 @@ class OpenRouterProvider(BaseProvider):
         }
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.post(_OPENROUTER_URL, json=payload, headers=headers)
-                resp.raise_for_status()
-                data = resp.json()
+            resp = await self._client.post(_OPENROUTER_URL, json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
         except httpx.HTTPStatusError as exc:
             raise ProviderError(
                 f"OpenRouter HTTP {exc.response.status_code}: {exc.response.text}",
@@ -60,6 +67,7 @@ class OpenRouterProvider(BaseProvider):
         except httpx.RequestError as exc:
             raise ProviderError(f"OpenRouter request error: {exc}") from exc
 
+        raise_if_error_envelope(data, "OpenRouter")
         choice = data["choices"][0]
         message = choice["message"]
         finish_reason = choice.get("finish_reason", "stop")

@@ -14,6 +14,7 @@ limits:
   mcp_tool_timeout_seconds: 30     # per-tool-call timeout against MCP servers
   llm_retry_attempts: 2            # retries on the same model before falling over to model_fallbacks
   llm_retry_base_delay_seconds: 1.0  # exponential backoff base delay between retries
+  max_concurrent_runs: 10          # gateway-wide cap on simultaneously executing agent runs
 
 # MCP tool servers — each is spawned as a subprocess on gateway startup.
 # Remove servers you don't need. All env values support ${VAR_NAME} resolution.

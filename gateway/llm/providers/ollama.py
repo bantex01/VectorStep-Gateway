@@ -6,7 +6,12 @@ import uuid
 
 import httpx
 
-from gateway.llm.providers.base import BaseProvider, ProviderError, ProviderResponse
+from gateway.llm.providers.base import (
+    BaseProvider,
+    ProviderError,
+    ProviderResponse,
+    raise_if_error_envelope,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +20,10 @@ class OllamaProvider(BaseProvider):
     def __init__(self, base_url: str = "http://localhost:11434/v1", api_key: str = "", timeout: float = 180.0) -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
-        self._timeout = timeout
+        self._client = httpx.AsyncClient(timeout=timeout)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
 
     async def complete(
         self,
@@ -49,10 +57,9 @@ class OllamaProvider(BaseProvider):
         url = f"{self._base_url}/chat/completions"
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.post(url, json=payload, headers=headers)
-                resp.raise_for_status()
-                data = resp.json()
+            resp = await self._client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
         except httpx.HTTPStatusError as exc:
             raise ProviderError(
                 f"Ollama HTTP {exc.response.status_code}: {exc.response.text}",
@@ -61,6 +68,7 @@ class OllamaProvider(BaseProvider):
         except httpx.RequestError as exc:
             raise ProviderError(f"Ollama request error: {exc}") from exc
 
+        raise_if_error_envelope(data, "Ollama")
         choice = data["choices"][0]
         message = choice["message"]
         finish_reason = choice.get("finish_reason", "stop")
@@ -113,7 +121,10 @@ class OllamaCloudProvider(BaseProvider):
     def __init__(self, base_url: str = "https://ollama.com/api", api_key: str = "", timeout: float = 180.0) -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
-        self._timeout = timeout
+        self._client = httpx.AsyncClient(timeout=timeout)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
 
     @staticmethod
     def _normalize_messages(messages: list) -> list:
@@ -188,10 +199,9 @@ class OllamaCloudProvider(BaseProvider):
         url = f"{self._base_url}/chat"
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.post(url, json=payload, headers=headers)
-                resp.raise_for_status()
-                data = resp.json()
+            resp = await self._client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
         except httpx.HTTPStatusError as exc:
             raise ProviderError(
                 f"Ollama Cloud HTTP {exc.response.status_code}: {exc.response.text}",
@@ -200,6 +210,7 @@ class OllamaCloudProvider(BaseProvider):
         except httpx.RequestError as exc:
             raise ProviderError(f"Ollama Cloud request error: {exc}") from exc
 
+        raise_if_error_envelope(data, "Ollama Cloud")
         # Native Ollama response: top-level "message" object, not choices[]
         message = data.get("message", {})
         done_reason = data.get("done_reason", "stop")

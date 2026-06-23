@@ -105,6 +105,7 @@ The operator token (used by P-Ork to authenticate) is written to `<path>/device-
 | `mcp_tool_timeout_seconds` | `30` | Timeout for a single MCP tool call |
 | `llm_retry_attempts` | `2` | Retries on the *same* model after a retryable error (429/5xx/529/timeout/connection error) before falling over to the next entry in `model_fallbacks` |
 | `llm_retry_base_delay_seconds` | `1.0` | Base delay for exponential backoff between retries (doubles each attempt: 1s, 2s, 4s, …) |
+| `max_concurrent_runs` | `10` | Gateway-wide cap on simultaneously executing agent runs. Once at capacity, new requests are still accepted (`Frame 1`) but queue until a slot frees up. |
 
 ### `mcp_servers`
 
@@ -395,6 +396,18 @@ pipeline:run-123:triage                     ❌ (missing agent prefix)
 
 The P-Ork `gateway` executor generates a valid session key automatically if `session_key` is omitted from `executor_config`.
 
+### Concurrency and Cancellation
+
+Each `agent` request is gated by a gateway-wide semaphore sized by `limits.max_concurrent_runs`
+(default `10`). The `accepted` frame (with `runId`) is always sent immediately; if the gateway is
+already at capacity, the run queues silently behind it — no trace events fire until a slot frees
+up and the run actually starts.
+
+If the client disconnects (the WebSocket closes) while a run is in flight — whether still queued
+or already executing — the gateway cancels it immediately rather than letting the agentic loop run
+to completion for a response nobody will receive. Cancelled runs are recorded with
+`status="aborted"` in the `pork_gateway_agent_runs_total` metric.
+
 ---
 
 ## REST Endpoints
@@ -428,7 +441,7 @@ scrape_configs:
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
-| `pork_gateway_agent_runs_total` | Counter | `agent`, `model`, `status` | Total agent runs by agent, model, and terminal status (`ok`/`error`/`timeout`/`max_iterations`) |
+| `pork_gateway_agent_runs_total` | Counter | `agent`, `model`, `status` | Total agent runs by agent, model, and terminal status (`ok`/`error`/`timeout`/`max_iterations`/`aborted`) |
 | `pork_gateway_agent_runs_in_progress` | Gauge | — | Currently executing agent runs |
 | `pork_gateway_agent_run_duration_seconds` | Histogram | `agent` | Agent run wall-clock duration in seconds |
 | `pork_gateway_agent_iterations` | Histogram | `agent` | Number of LLM iterations per agent run |

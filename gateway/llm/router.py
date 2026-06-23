@@ -19,6 +19,11 @@ class LLMRouter:
         self._config = config
         self._providers: dict[str, BaseProvider] = {}
 
+    async def aclose(self) -> None:
+        """Close every provider instantiated so far (releases pooled HTTP connections)."""
+        for provider in self._providers.values():
+            await provider.aclose()
+
     def get_provider_and_model(self, model_string: str) -> tuple[BaseProvider, str]:
         """Return (provider, bare_model_name) for the given model string.
 

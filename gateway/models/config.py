@@ -12,6 +12,7 @@ class LimitsConfig(BaseModel):
     mcp_tool_timeout_seconds: int = 30
     llm_retry_attempts: int = 2          # retries on the *same* model before falling over
     llm_retry_base_delay_seconds: float = 1.0  # doubles each attempt (exponential backoff)
+    max_concurrent_runs: int = 10        # gateway-wide cap on simultaneously executing agent runs
 
 
 class ServerConfig(BaseModel):

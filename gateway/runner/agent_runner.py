@@ -421,6 +421,12 @@ class AgentRunner:
             else:
                 run_status = "error"
             raise
+        except asyncio.CancelledError:
+            # Caller (gateway WS handler) cancelled us — e.g. the client
+            # disconnected mid-run. Not an error; record it distinctly so it
+            # isn't misreported as a successful "ok" run.
+            run_status = "aborted"
+            raise
         except Exception:
             run_status = "error"
             raise

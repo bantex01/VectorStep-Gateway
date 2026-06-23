@@ -3,7 +3,7 @@ import logging
 import os
 import secrets
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -56,6 +56,9 @@ async def lifespan(app: FastAPI):
     _state["session_manager"] = session_manager
     _state["mcp_manager"] = mcp_manager
     _state["agent_runner"] = agent_runner
+    # Gates total concurrent agent runs gateway-wide — acquiring blocks (queues)
+    # rather than rejecting once the gateway is at capacity.
+    _state["run_semaphore"] = asyncio.Semaphore(config.limits.max_concurrent_runs)
 
     def _reload():
         new_agents = load_agents(config.agents_dir)
@@ -76,6 +79,7 @@ async def lifespan(app: FastAPI):
     yield
 
     await mcp_manager.stop_all()
+    await llm_router.aclose()
     shutdown_tracing()
 
 
@@ -131,6 +135,23 @@ async def mcp_tools():
 async def mcp_servers():
     manager: MCPManager = _state["mcp_manager"]
     return manager.get_server_status()
+
+
+async def _wait_for_disconnect(ws: WebSocket) -> None:
+    """Block until the client disconnects.
+
+    The WS protocol only supports one in-flight request per connection, so any
+    non-disconnect message received here is unexpected — log it and keep
+    waiting rather than treating it as a signal.
+    """
+    while True:
+        message = await ws.receive()
+        if message["type"] == "websocket.disconnect":
+            return
+        logging.getLogger(__name__).warning(
+            "Unexpected message received while an agent run was in flight — ignoring: %r",
+            message,
+        )
 
 
 @app.websocket("/rpc")
@@ -225,32 +246,70 @@ async def rpc(ws: WebSocket):
                 runner: AgentRunner = _state["agent_runner"]
                 mcp_manager: MCPManager = _state["mcp_manager"]
                 config: GatewayConfig = _state["config"]
+                run_semaphore: asyncio.Semaphore = _state["run_semaphore"]
 
                 message_text = params.get("message", "")
                 model_override = params.get("model") or None
                 thinking_level = params.get("thinkingLevel") or None
                 remote_ctx = extract_remote_context(params)
 
-                try:
-                    async def _send_trace_event(event: dict) -> None:
-                        await ws.send_json({
-                            "type": "res",
-                            "id": msg_id,
-                            "ok": True,
-                            "payload": {"status": "trace_event", "event": event},
-                        })
+                async def _send_trace_event(event: dict) -> None:
+                    await ws.send_json({
+                        "type": "res",
+                        "id": msg_id,
+                        "ok": True,
+                        "payload": {"status": "trace_event", "event": event},
+                    })
 
-                    result = await runner.run(
-                        agent=agent,
-                        session_key=session_key,
-                        message=message_text,
-                        model_override=model_override,
-                        thinking_level=thinking_level,
-                        mcp_manager=mcp_manager,
-                        limits=config.limits,
-                        on_trace_event=_send_trace_event,
-                        remote_context=remote_ctx,
+                async def _run_agent():
+                    # Gate total concurrent runs gateway-wide. Acquiring queues
+                    # rather than rejects once the gateway is at capacity.
+                    async with run_semaphore:
+                        return await runner.run(
+                            agent=agent,
+                            session_key=session_key,
+                            message=message_text,
+                            model_override=model_override,
+                            thinking_level=thinking_level,
+                            mcp_manager=mcp_manager,
+                            limits=config.limits,
+                            on_trace_event=_send_trace_event,
+                            remote_context=remote_ctx,
+                        )
+
+                run_task = asyncio.create_task(_run_agent())
+                disconnect_task = asyncio.create_task(_wait_for_disconnect(ws))
+
+                done, _ = await asyncio.wait(
+                    {run_task, disconnect_task}, return_when=asyncio.FIRST_COMPLETED
+                )
+
+                if disconnect_task in done:
+                    # Client disconnected (whether queued or already running) —
+                    # cancel instead of letting it keep burning LLM/tool calls
+                    # for a response nobody will receive.
+                    run_task.cancel()
+                    try:
+                        await run_task
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception as exc:
+                        logging.getLogger(__name__).warning(
+                            "Agent run for %s errored after client disconnect: %s",
+                            agent_id, exc,
+                        )
+                    logging.getLogger(__name__).info(
+                        "Client disconnected mid-run for agent %s (run %s) — cancelled",
+                        agent_id, run_id,
                     )
+                    break
+
+                disconnect_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await disconnect_task
+
+                try:
+                    result = await run_task
 
                     # Derive provider name from the model string used
                     effective_model = model_override or agent.model

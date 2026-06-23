@@ -22,6 +22,9 @@ class AnthropicProvider(BaseProvider):
     def __init__(self, api_key: str) -> None:
         self._client = AsyncAnthropic(api_key=api_key)
 
+    async def aclose(self) -> None:
+        await self._client.close()
+
     async def complete(
         self,
         system: str,
