@@ -6,8 +6,21 @@ import yaml
 from pydantic import ValidationError
 
 from gateway.models.agent import AgentConfig
+from gateway.models.config import GatewayConfig
 
 logger = logging.getLogger(__name__)
+
+# Maps the model-string prefix (as used in agent.yaml) to the provider field name
+# on ProvidersConfig. Must stay in sync with LLMRouter.get_provider_and_model.
+_PREFIX_TO_PROVIDER: dict[str, str] = {
+    "anthropic/": "anthropic",
+    "openrouter/": "openrouter",
+    "ollama/": "ollama",         # ollama-local in config
+    "ollama-cloud/": "ollama_cloud",
+    "google/": "google",
+}
+# Providers that work without an api_key (local Ollama uses no auth by default).
+_KEY_NOT_REQUIRED = {"ollama"}
 
 
 def load_agents(agents_dir: str) -> dict[str, AgentConfig]:
@@ -46,6 +59,54 @@ def load_agents(agents_dir: str) -> dict[str, AgentConfig]:
         logger.info("Loaded agent: %s (model: %s)", agent.name, agent.model)
 
     return agents
+
+
+def validate_agent_models(agents: dict[str, AgentConfig], config: GatewayConfig) -> None:
+    """Log errors/warnings for model strings that reference unknown or unconfigured providers.
+
+    Called at startup and on hot reload so misconfigurations surface immediately
+    rather than as a KeyError at first request time.
+    """
+    providers = config.providers
+    key_configured: dict[str, bool] = {
+        "anthropic": bool(providers.anthropic.api_key),
+        "openrouter": bool(providers.openrouter.api_key),
+        "ollama": True,  # local Ollama — no API key needed
+        "ollama_cloud": bool(providers.ollama_cloud.api_key),
+        "google": bool(providers.google.api_key),
+    }
+
+    for agent_name, agent in agents.items():
+        for model_string in [agent.model, *agent.model_fallbacks]:
+            provider_key: str | None = None
+            for prefix, pkey in _PREFIX_TO_PROVIDER.items():
+                if model_string.startswith(prefix):
+                    provider_key = pkey
+                    break
+
+            if provider_key is None:
+                if "/" in model_string:
+                    # Has a slash-separated prefix but it doesn't match any known provider.
+                    logger.error(
+                        "Agent '%s': model '%s' uses an unrecognized provider prefix"
+                        " — will fail at request time. Known prefixes: %s",
+                        agent_name,
+                        model_string,
+                        ", ".join(p.rstrip("/") for p in _PREFIX_TO_PROVIDER),
+                    )
+                    continue
+                else:
+                    # Bare model name (no prefix) — routes to Anthropic by default.
+                    provider_key = "anthropic"
+
+            if provider_key not in _KEY_NOT_REQUIRED and not key_configured.get(provider_key, False):
+                logger.warning(
+                    "Agent '%s': model '%s' uses provider '%s' but its api_key is not"
+                    " configured — requests will likely fail with auth errors",
+                    agent_name,
+                    model_string,
+                    provider_key.replace("_", "-"),
+                )
 
 
 def install_sighup_handler(reload_fn) -> None:

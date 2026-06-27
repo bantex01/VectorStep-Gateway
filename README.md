@@ -286,6 +286,17 @@ Good soul files are:
 - **Explicit about output format** — tell the model to return JSON only, no preamble
 - **Clear on confidence scoring** — explain what high/low confidence means for this agent's task
 
+### Startup Config Validation
+
+When agents are loaded (at startup and on every `POST /reload` / SIGHUP), the gateway validates each agent's `model` and `model_fallbacks` against the configured providers:
+
+- **Unrecognized prefix** (e.g. `my-custom/model`) — logged as `ERROR`. The agent will load but every request will fail with a `KeyError` at runtime.
+- **Known prefix, missing api_key** (e.g. `openrouter/...` but `providers.openrouter.api_key` is empty) — logged as `WARNING`. The agent will load but requests will fail with auth errors.
+
+Local Ollama (`ollama/...`) is exempt from the api_key check — it requires no credentials by default.
+
+These are warnings/errors in the log, not hard failures. All other agents continue to load normally. Check startup logs if an agent behaves unexpectedly at request time.
+
 ### Hot Reload
 
 ```bash
@@ -293,7 +304,7 @@ POST /reload          # via HTTP
 kill -HUP <pid>       # via SIGHUP
 ```
 
-Reloads all agent configs from disk without restarting. In-progress runs are unaffected.
+Reloads all agent configs from disk without restarting. In-progress runs are unaffected. Validation runs against the reloaded agents on every reload.
 
 ---
 
@@ -387,7 +398,7 @@ On error, the final frame is: `{"type": "res", "id": "uuid-2", "ok": false, "err
 
 ### Session Keys
 
-Session keys must start with `agent:<agentId>:` — the gateway validates this to enforce isolation.
+Session keys must start with `agent:<agentId>:` — the gateway validates this prefix on every request.
 
 ```
 agent:sre-triage:pipeline:run-123:triage    ✅
@@ -395,6 +406,10 @@ pipeline:run-123:triage                     ❌ (missing agent prefix)
 ```
 
 The P-Ork `gateway` executor generates a valid session key automatically if `session_key` is omitted from `executor_config`.
+
+**What session keys do and don't do:** the gateway tracks session keys in memory (used for the `pork_gateway_sessions_active` metric) but does **not** persist message history between requests. Every agent call starts with a fresh message list containing only the current prompt. Session keys in this gateway provide namespace isolation and prefix validation — not conversational continuity across calls.
+
+This is intentional for P-Ork's usage pattern: session keys are scoped per pipeline run and step (e.g. `agent:sre-triage:pipeline:{{pipeline_run_id}}:triage`), so no two invocations of the same step share a key. Context passing between steps is handled explicitly by P-Ork via `next_step_context`, prompt templates, and `{{loop.prior_output}}` — the pipeline author controls exactly what each step sees, rather than the agent accumulating unbounded conversation history.
 
 ### Concurrency and Cancellation
 
@@ -414,6 +429,7 @@ to completion for a response nobody will receive. Cancelled runs are recorded wi
 
 | Method | Path | Description |
 |---|---|---|
+| `GET` | `/health` | Service health — status, agent count, MCP server states, active run count |
 | `GET` | `/agents` | List loaded agents (name, model, tools) |
 | `GET` | `/agents/{name}/soul` | Return the soul.md content for an agent |
 | `GET` | `/agents/{name}/agent` | Return the agent.yaml content for an agent |
@@ -421,6 +437,24 @@ to completion for a response nobody will receive. Cancelled runs are recorded wi
 | `GET` | `/mcp/tools` | List all tools across all MCP servers |
 | `GET` | `/mcp/servers` | List MCP server status (pid, tool count) |
 | `GET` | `/metrics` | Prometheus metrics (no auth required) |
+
+### `/health` response
+
+```json
+{
+  "status": "ok",
+  "version": "0.5.0",
+  "agents": 3,
+  "active_runs": 1,
+  "max_concurrent_runs": 10,
+  "mcp_servers": {
+    "grafana": {"running": true, "restart_count": 0},
+    "atlassian": {"running": true, "restart_count": 1}
+  }
+}
+```
+
+`status` is `"ok"` when all configured MCP servers are running, `"degraded"` if any are down. A gateway with no MCP servers configured always returns `"ok"`. No authentication is required — suitable for Kubernetes liveness/readiness probes.
 
 ---
 

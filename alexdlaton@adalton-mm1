@@ -1,0 +1,175 @@
+# P-Ork Gateway — Improvement Backlog
+
+> Context dump from a codebase review (2026-06-08). If you're a future Claude session,
+> read this file plus the files it references to get up to speed before implementing any of these.
+
+## What this project is (and what's genuinely good)
+
+P-Ork Gateway is a clean ~2,200-line FastAPI WebSocket gateway that runs the full agentic
+loop (LLM ↔ MCP tools) on behalf of P-Ork pipelines. Architecture highlights:
+
+- **Provider abstraction** (`BaseProvider.complete`) normalizes 5 providers (Anthropic native
+  + 4 OpenAI/Ollama-compat) onto one `ProviderResponse` shape — `gateway/llm/providers/`.
+- **MCP supervision is the standout** — `_monitor` auto-restarts crashed servers and re-caches
+  their tools (`gateway/mcp/manager.py:194`), with namespaced tool names (`server__tool`) to
+  avoid collisions.
+- **Trace streaming** — the runner emits `llm_call`/`thinking`/`tool_call`/`tool_result` events
+  live over the same WS frame id (`gateway/runner/agent_runner.py:79`); this powers the live tail.
+
+It works end-to-end and the provider quirk-handling (Ollama putting output in `reasoning`,
+native Ollama omitting tool-call IDs) shows real battle-testing.
+
+---
+
+## ⚠️ The most surprising finding: session memory is dead code
+
+`SessionManager.get_or_create` builds a `Session` with a `messages: list` field
+(`gateway/session/manager.py:13`), and `gateway/main.py:201` calls it — but **`AgentRunner.run`
+never receives or uses that Session**. Every run starts fresh:
+
+```python
+messages: list[dict] = [{"role": "user", "content": message}]  # agent_runner.py:71
+```
+
+So the README's "multi-turn conversation" claim isn't actually true across requests — history
+is discarded the moment a run returns. The scaffolding is all there; it's just never wired
+through. Either a quick win (wire it up) or an intentional design choice worth documenting honestly.
+
+---
+
+## Really cool improvements (ranked by impact-to-effort)
+
+### 1. ✅ Anthropic prompt caching — DONE (2026-06-22)
+The `soul` system prompt and the full tool-schema list are now sent with
+`cache_control: {"type": "ephemeral"}` on the system block and the last tool definition
+(`gateway/llm/providers/anthropic.py`). Anthropic caching is prefix-based, so marking the last
+tool caches the whole tools array. Anthropic-only — OpenAI-compat providers have no equivalent.
+
+### 2. ✅ Parallel tool execution — DONE (2026-06-22)
+Tool calls within one turn now run concurrently via `asyncio.gather`
+(`gateway/runner/agent_runner.py`) instead of a sequential `for` loop. `gather()` preserves
+input order in its results regardless of completion order, so message ordering stays
+deterministic even though trace events (`tool_call`/`tool_result`) now stream in actual
+completion order rather than block order.
+
+### 3. ✅ Model fallback chains — DONE (2026-06-22)
+`agent.yaml` can now declare `model_fallbacks: [...]` (`gateway/models/agent.py`). On a
+retryable error (429/5xx/529/timeout/connection error), the runner retries the same model with
+exponential backoff (`limits.llm_retry_attempts`/`llm_retry_base_delay_seconds`,
+`gateway/models/config.py`), then falls over to the next model in the chain once retries are
+exhausted (`gateway/runner/agent_runner.py:_call_llm`). Non-retryable errors (4xx other than 429)
+skip the retry and fall over immediately. `ProviderError` now carries an optional `status_code`
+(`gateway/llm/providers/base.py`) so the runner can classify errors — populated by all 5
+providers. New trace events: `llm_retry`, `model_fallback`. Once a fallback succeeds, later
+iterations in the same run try it first rather than flapping back to the original model.
+
+Note: the doc's original reference to `e80ea1b Added fallback` was a red herring — that commit
+is the unrelated Qwen `reasoning`-field-empty-content fallback in `ollama.py`, not model
+fallback chains. No prior work on this existed.
+
+### 4. ✅ Self-observability (`/metrics` + OTel) — DONE (prior to 2026-06-22)
+Implemented via the Prometheus `/metrics` endpoint (`gateway/metrics.py`, runs/tokens/tool
+latency histograms/MCP restart counts) and OpenTelemetry spans per run/tool-call
+(`gateway/tracing.py`, `agent_runner.py`). See README "Prometheus Metrics" and "observability"
+config sections.
+
+### 5. ✅ Per-agent tool allowlists — DONE (2026-06-22)
+`AgentConfig.tools` (`gateway/models/agent.py`) now accepts entries that are either a bare server
+name (every tool, original behaviour) or a `{server_name: [tool_a, tool_b]}` mapping to scope it
+down. `AgentConfig.tool_scopes()` normalizes both forms; `MCPManager.get_tools_for_agent`
+(`gateway/mcp/manager.py`) filters on it. Fully backward compatible — existing `tools: [grafana,
+atlassian]` lists behave exactly as before.
+
+As a follow-on (same session): added an "MCP Tools" page to the **P-Ork** UI
+(`../P-Ork/service/src/ui.py:ui_mcp`, `../P-Ork/service/templates/mcp.html`, nav link in
+`base.html`) that calls the gateway's existing `GET /mcp/tools` + `GET /mcp/servers` REST
+endpoints (no auth required, already returned name/description/inputSchema per tool and
+running/pid/restart_count per server — no gateway changes needed for this). Browseable per
+server, with tool schemas expandable as JSON. OpenClaw isn't included — it has no REST tool
+introspection endpoint, only the WS RPC agent-listing API.
+
+### 6. ✅ Reuse HTTP clients — DONE (2026-06-22)
+`OllamaProvider`, `OllamaCloudProvider`, `OpenRouterProvider`, and `GoogleProvider` now create one
+`httpx.AsyncClient` in `__init__` and reuse it for every `complete()` call instead of opening a
+fresh client (and TCP+TLS handshake) per request. `BaseProvider.aclose()` (default no-op,
+`gateway/llm/providers/base.py`) lets each provider release its client; `AnthropicProvider`
+already had a single persistent `AsyncAnthropic` client, so it just gained an `aclose()` too.
+`LLMRouter.aclose()` (`gateway/llm/router.py`) closes every provider it has lazily instantiated;
+called from the gateway's shutdown sequence in `gateway/main.py` (after `mcp_manager.stop_all()`).
+
+### 7. ✅ Concurrency control + real cancellation — DONE (2026-06-22)
+New `limits.max_concurrent_runs` (default `10`, `gateway/models/config.py`) backs a gateway-wide
+`asyncio.Semaphore` (`_state["run_semaphore"]`, created in `gateway/main.py` lifespan). Each
+`agent` request's run is wrapped in an `asyncio.create_task` and raced against a
+`_wait_for_disconnect(ws)` task via `asyncio.wait(..., return_when=FIRST_COMPLETED)`
+(`gateway/main.py:rpc`) — whichever finishes first decides the outcome:
+
+- Run finishes first → proceed normally, cancel the disconnect-watcher.
+- Disconnect detected first (whether the run was still queued on the semaphore or already
+  executing) → `run_task.cancel()` and stop, instead of letting the agentic loop burn LLM/tool
+  calls for a response nobody will receive. No final frame is sent (the socket is already gone).
+
+`AgentRunner.run()` (`gateway/runner/agent_runner.py`) gained an `except asyncio.CancelledError:`
+clause that tags the metrics status `"aborted"` before re-raising — previously a cancelled run
+would have fallen through to the `finally` block with whatever `run_status` was last set to
+(`"ok"` by default), silently mis-recording cancelled runs as successful.
+
+Verified end-to-end against the real FastAPI app via `starlette.testclient.TestClient` with two
+real WebSocket connections and a patched slow `AnthropicProvider.complete`: with
+`max_concurrent_runs: 1`, a second concurrent request's LLM call measurably started only after
+the first's completed (serialized, not concurrent); and closing a connection mid-run produced an
+observed `CancelledError` inside the in-flight fake LLM call rather than letting it run to
+completion.
+
+### Smaller but worthwhile
+- **Startup config validation**: a model string referencing an unconfigured provider fails at
+  request time with a raw `KeyError`, not at boot. Validate agents' models against `providers:`
+  on load.
+- **Auth is thin**: challenge nonce is generated but never verified, `privateKeyPem` is `""`,
+  tokens are plaintext UUIDs in a file, default bind is `0.0.0.0` with no TLS. Fine for a
+  trusted LAN; worth a security pass before anything wider.
+- **No `/health` endpoint** and **no automated tests** — the SPEC describes manual test
+  milestones, but there's no `tests/` dir, which makes the refactors above riskier than needed.
+
+---
+
+## Bug fixed: OpenRouter (and Google/Ollama) 200-OK error envelopes crashed the run — FIXED (2026-06-23)
+
+Found while debugging a real failure: the `otel-triage-verified` pipeline's `first-line-support`
+step (an OpenRouter free-tier model) crashed with a raw `KeyError: 'choices'` instead of a clean
+error. Root cause: OpenRouter (and presumably Google/Ollama, same OpenAI-compat response shape)
+can return **HTTP 200 OK with an `{"error": ...}` body** instead of `choices` when the upstream
+model provider it's proxying to fails — common on free-tier models under load. `httpx`'s
+`raise_for_status()` never catches this since the status is 200, so the old code went straight to
+`data["choices"][0]` and blew up with an unclassified `KeyError` that bypassed the retry/fallback
+logic entirely (#3) — bypassed because that logic only fires on classified `ProviderError`s.
+
+This bug predates everything in this doc (introduced 2026-05-26, the original LLM-executor
+commit) — the retry/fallback work in #3 didn't cause it, but it does mean #3's retry/fallback
+logic was silently inert against this specific failure mode until now.
+
+Fix: new `raise_if_error_envelope(data, provider_label)` helper in
+`gateway/llm/providers/base.py`, called right after `resp.json()` in `openrouter.py`, `google.py`,
+and both providers in `ollama.py`, before any `data["choices"]`/`data["message"]` indexing. Raises
+a classified `ProviderError` (status code from `error.get("code")` if present, else `None` —
+which the runner already treats as retryable) so this failure mode now flows through the existing
+retry + model-fallback machinery instead of crashing the run. Verified: reproduced the exact 200+
+error-envelope response via a mocked `httpx` transport, confirmed a clean `ProviderError` is now
+raised instead of `KeyError`, confirmed normal success responses are unaffected, and confirmed
+the failure now retries and recovers cleanly through `AgentRunner.run()` end-to-end.
+
+---
+
+## Suggested first PR
+
+~~Bundle **#1 (prompt caching) + #2 (parallel tools)** — both small, both pure wins, no API
+surface change.~~ Done (2026-06-22).
+~~#3 (model fallback chains + retry/backoff).~~ Done (2026-06-22).
+~~#5 (per-agent tool allowlists).~~ Done (2026-06-22).
+~~#6 (reuse HTTP clients).~~ Done (2026-06-22).
+~~#7 (concurrency control + real cancellation).~~ Done (2026-06-22).
+
+All 7 ranked items are now done. What's left: the smaller items (startup config validation, thin
+auth, no `/health` endpoint, no automated test suite) and the session-memory dead-code item above
+— wiring `SessionManager`'s `messages` list through to `AgentRunner.run()` so multi-turn actually
+works across requests, matching the README's existing claim.

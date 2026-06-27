@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
-from gateway.agents.loader import install_sighup_handler, load_agents
+from gateway.agents.loader import install_sighup_handler, load_agents, validate_agent_models
 from gateway.auth.device import bootstrap_identity, get_operator_token
 from gateway.llm.router import LLMRouter
 from gateway.mcp.manager import MCPManager
@@ -39,6 +39,7 @@ async def lifespan(app: FastAPI):
     operator_token = get_operator_token(auth_data)
 
     agents = load_agents(config.agents_dir)
+    validate_agent_models(agents, config)
     session_manager = SessionManager()
 
     mcp_manager = MCPManager(config)
@@ -62,6 +63,7 @@ async def lifespan(app: FastAPI):
 
     def _reload():
         new_agents = load_agents(config.agents_dir)
+        validate_agent_models(new_agents, config)
         _state["agents"] = new_agents
         logging.getLogger(__name__).info(
             "Reloaded %d agent(s): %s", len(new_agents), list(new_agents)
@@ -123,6 +125,32 @@ async def reload_agents():
     _state["reload_fn"]()
     agents: dict[str, AgentConfig] = _state["agents"]
     return {"agents": [{"name": a.name, "model": a.model} for a in agents.values()]}
+
+
+@app.get("/health")
+async def health():
+    config: GatewayConfig = _state["config"]
+    mcp_manager: MCPManager = _state["mcp_manager"]
+    agents: dict[str, AgentConfig] = _state["agents"]
+    run_semaphore: asyncio.Semaphore = _state["run_semaphore"]
+
+    max_runs = config.limits.max_concurrent_runs
+    active_runs = max_runs - run_semaphore._value
+
+    server_status = mcp_manager.get_server_status()
+    all_mcp_running = all(s["running"] for s in server_status.values()) if server_status else True
+
+    return {
+        "status": "ok" if all_mcp_running else "degraded",
+        "version": "0.5.0",
+        "agents": len(agents),
+        "active_runs": active_runs,
+        "max_concurrent_runs": max_runs,
+        "mcp_servers": {
+            name: {"running": s["running"], "restart_count": s["restart_count"]}
+            for name, s in server_status.items()
+        },
+    }
 
 
 @app.get("/mcp/tools")
