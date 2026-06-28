@@ -67,7 +67,8 @@ P-Ork-Gateway/
 │   │       ├── anthropic.py          # Anthropic API (native SDK, extended thinking)
 │   │       ├── openrouter.py         # OpenRouter via httpx (OpenAI-compat)
 │   │       ├── ollama.py             # Local Ollama (OpenAI-compat) + Ollama Cloud (native)
-│   │       └── google.py             # Google Gemini via OpenAI-compat endpoint
+│   │       ├── google.py             # Google Gemini via OpenAI-compat endpoint
+│   │       └── azure.py             # Azure OpenAI (OpenAI-compat, api-key header auth)
 │   ├── runner/agent_runner.py        # Full agentic loop: LLM ↔ MCP tool calls
 │   └── models/
 │       ├── config.py                 # GatewayConfig, ProviderConfig, LimitsConfig, OtelConfig
@@ -146,22 +147,37 @@ providers:
   google:
     api_key: ${GOOGLE_API_KEY}
     base_url: https://generativelanguage.googleapis.com/v1beta/openai
+  azure:
+    api_key: ${AZURE_OPENAI_API_KEY}
+    resource_name: ${AZURE_OPENAI_RESOURCE}   # e.g. "my-company-openai"
+    api_version: "2025-01-01-preview"         # optional, this is the default
 ```
+
+Most providers support `api_key` and `base_url`. Azure uses different fields:
 
 | Field | Required | Description |
 |---|---|---|
 | `api_key` | No | API key. Empty string = no auth header sent. |
-| `base_url` | No | Override the provider's default endpoint. |
+| `base_url` | No | Override the provider's default endpoint (not used for `azure`). |
+
+**Azure-specific fields** (under `providers.azure`):
+
+| Field | Required | Description |
+|---|---|---|
+| `api_key` | Yes | Azure OpenAI API key from Azure AI Foundry. |
+| `resource_name` | Yes | Azure resource name — the subdomain part of `{resource_name}.openai.azure.com`. |
+| `api_version` | No | Azure API version. Default: `2025-01-01-preview`. |
 
 **Default endpoints:**
 
-| Provider key | Default `base_url` | Notes |
+| Provider key | Default endpoint | Notes |
 |---|---|---|
 | `anthropic` | SDK default | Uses Anthropic Python SDK natively |
 | `openrouter` | `https://openrouter.ai/api/v1` | OpenAI-compat |
 | `ollama-local` | `http://localhost:11434/v1` | Local Ollama OpenAI-compat endpoint |
 | `ollama-cloud` | `https://ollama.com/api` | Native Ollama `/api/chat` endpoint |
 | `google` | `https://generativelanguage.googleapis.com/v1beta/openai` | OpenAI-compat |
+| `azure` | `https://{resource_name}.openai.azure.com/openai/deployments/{deployment}/chat/completions` | OpenAI-compat, auth via `api-key` header |
 
 ### `logging`
 
@@ -218,7 +234,24 @@ The prefix in a model string determines which provider handles the call:
 | `ollama-local/qwen3:8b` | Local Ollama | OpenAI-compat via `/v1/chat/completions` |
 | `ollama-cloud/gemma3:27b` | Ollama Cloud | Native Ollama `/api/chat` |
 | `google/gemini-2.0-flash` | Google Gemini | OpenAI-compat |
+| `azure/gpt-4o` | Azure OpenAI | OpenAI-compat; `gpt-4o` is the deployment name |
 | `claude-sonnet-4-6` | Anthropic | Bare name (no prefix) defaults to Anthropic |
+
+### Azure OpenAI
+
+For Azure, the model string suffix is the **deployment name** you set up in Azure AI Foundry (not the underlying model family name). If you deployed GPT-4o and named the deployment `gpt-4o`, the model string is `azure/gpt-4o`. Different deployments of the same underlying model can have different names.
+
+```yaml
+# agent.yaml
+name: my-azure-agent
+model: azure/gpt-4o           # deployment name from Azure AI Foundry
+max_tokens: 4096
+model_fallbacks:
+  - azure/gpt-4o-mini         # cheaper fallback deployment
+  - anthropic/claude-haiku-4-5-20251001  # cross-provider fallback
+```
+
+Azure's API is OpenAI-compatible. The only differences handled internally are the endpoint URL format and the `api-key` request header (instead of `Authorization: Bearer`). Extended thinking is not available on Azure OpenAI.
 
 The key name in `providers:` config must match the prefix in the model string exactly.
 
@@ -522,6 +555,8 @@ pork_gateway_sessions_active
 | `OPENROUTER_API_KEY` | `providers.openrouter` | OpenRouter API key |
 | `OLLAMA_API_KEY` | `providers.ollama-cloud` | Ollama Cloud API key — [get one here](https://ollama.com/settings/keys) |
 | `GOOGLE_API_KEY` | `providers.google` | Google AI API key |
+| `AZURE_OPENAI_API_KEY` | `providers.azure.api_key` | Azure OpenAI API key |
+| `AZURE_OPENAI_RESOURCE` | `providers.azure.resource_name` | Azure resource name (subdomain of `.openai.azure.com`) |
 | `GRAFANA_URL` | `mcp_servers.grafana` | Grafana instance URL |
 | `GRAFANA_TOKEN` | `mcp_servers.grafana` | Grafana service account token |
 | `TAVILY_API_KEY` | `mcp_servers.tavily` | Tavily web search API key |

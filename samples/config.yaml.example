@@ -66,5 +66,10 @@ providers:
   #   api_key: ${GOOGLE_API_KEY}
   #   base_url: https://generativelanguage.googleapis.com/v1beta/openai
 
+  # azure:                                     # Azure OpenAI — model prefix: azure/<deployment-name>
+  #   api_key: ${AZURE_OPENAI_API_KEY}
+  #   resource_name: ${AZURE_OPENAI_RESOURCE}  # e.g. "my-company-openai" → my-company-openai.openai.azure.com
+  #   api_version: "2025-01-01-preview"        # optional — this is the default
+
 logging:
   level: INFO     # DEBUG | INFO | WARNING | ERROR

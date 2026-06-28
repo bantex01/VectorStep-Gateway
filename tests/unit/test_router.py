@@ -2,11 +2,13 @@
 import pytest
 
 from gateway.llm.providers.anthropic import AnthropicProvider
+from gateway.llm.providers.azure import AzureOpenAIProvider
 from gateway.llm.providers.google import GoogleProvider
 from gateway.llm.providers.ollama import OllamaCloudProvider, OllamaProvider
 from gateway.llm.providers.openrouter import OpenRouterProvider
 from gateway.llm.router import LLMRouter
 from gateway.models.config import (
+    AzureConfig,
     GatewayConfig,
     IdentityConfig,
     LimitsConfig,
@@ -23,6 +25,17 @@ def _config(**provider_keys):
         server=ServerConfig(),
         identity=IdentityConfig(),
         providers=ProvidersConfig(**providers_kwargs),
+        limits=LimitsConfig(),
+    )
+
+
+def _azure_config(api_key="key", resource_name="my-resource", api_version="2025-01-01-preview"):
+    return GatewayConfig(
+        server=ServerConfig(),
+        identity=IdentityConfig(),
+        providers=ProvidersConfig(
+            azure=AzureConfig(api_key=api_key, resource_name=resource_name, api_version=api_version)
+        ),
         limits=LimitsConfig(),
     )
 
@@ -63,6 +76,18 @@ class TestRouting:
         assert isinstance(provider, GoogleProvider)
         assert model == "gemini-2.0-flash"
 
+    def test_azure_prefix(self):
+        router = LLMRouter(_azure_config())
+        provider, model = router.get_provider_and_model("azure/gpt-4o")
+        assert isinstance(provider, AzureOpenAIProvider)
+        assert model == "gpt-4o"
+
+    def test_azure_prefix_mini(self):
+        router = LLMRouter(_azure_config())
+        provider, model = router.get_provider_and_model("azure/gpt-4o-mini")
+        assert isinstance(provider, AzureOpenAIProvider)
+        assert model == "gpt-4o-mini"
+
     def test_bare_name_defaults_to_anthropic(self):
         router = LLMRouter(_config(anthropic="key"))
         provider, model = router.get_provider_and_model("claude-sonnet-4-6")
@@ -77,6 +102,12 @@ class TestRouting:
 
 
 class TestProviderCaching:
+    def test_azure_same_instance_returned(self):
+        router = LLMRouter(_azure_config())
+        p1, _ = router.get_provider_and_model("azure/gpt-4o")
+        p2, _ = router.get_provider_and_model("azure/gpt-4o-mini")
+        assert p1 is p2
+
     def test_same_instance_returned_for_same_type(self):
         router = LLMRouter(_config(anthropic="key"))
         p1, _ = router.get_provider_and_model("anthropic/claude-sonnet-4-6")

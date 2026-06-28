@@ -18,6 +18,7 @@ _PREFIX_TO_PROVIDER: dict[str, str] = {
     "ollama/": "ollama",         # ollama-local in config
     "ollama-cloud/": "ollama_cloud",
     "google/": "google",
+    "azure/": "azure",
 }
 # Providers that work without an api_key (local Ollama uses no auth by default).
 _KEY_NOT_REQUIRED = {"ollama"}
@@ -74,6 +75,7 @@ def validate_agent_models(agents: dict[str, AgentConfig], config: GatewayConfig)
         "ollama": True,  # local Ollama — no API key needed
         "ollama_cloud": bool(providers.ollama_cloud.api_key),
         "google": bool(providers.google.api_key),
+        "azure": bool(providers.azure.api_key and providers.azure.resource_name),
     }
 
     for agent_name, agent in agents.items():

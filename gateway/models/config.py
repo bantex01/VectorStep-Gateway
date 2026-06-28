@@ -35,6 +35,12 @@ class ProviderConfig(BaseModel):
     base_url: Optional[str] = None
 
 
+class AzureConfig(BaseModel):
+    api_key: str = ""
+    resource_name: str = ""          # subdomain of .openai.azure.com, e.g. "my-company-openai"
+    api_version: str = "2025-01-01-preview"
+
+
 class ProvidersConfig(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -43,6 +49,7 @@ class ProvidersConfig(BaseModel):
     ollama: ProviderConfig = Field(default_factory=ProviderConfig, alias="ollama-local")
     ollama_cloud: ProviderConfig = Field(default_factory=ProviderConfig, alias="ollama-cloud")
     google: ProviderConfig = Field(default_factory=ProviderConfig)
+    azure: AzureConfig = Field(default_factory=AzureConfig)
 
 
 class LoggingConfig(BaseModel):

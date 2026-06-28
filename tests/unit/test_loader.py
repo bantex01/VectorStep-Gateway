@@ -7,6 +7,7 @@ import yaml
 from gateway.agents.loader import load_agents, validate_agent_models
 from gateway.models.agent import AgentConfig
 from gateway.models.config import (
+    AzureConfig,
     GatewayConfig,
     IdentityConfig,
     ProvidersConfig,
@@ -15,7 +16,8 @@ from gateway.models.config import (
 )
 
 
-def _make_config(anthropic_key="", openrouter_key="", ollama_cloud_key="", google_key=""):
+def _make_config(anthropic_key="", openrouter_key="", ollama_cloud_key="", google_key="",
+                 azure_key="", azure_resource=""):
     return GatewayConfig(
         server=ServerConfig(),
         identity=IdentityConfig(),
@@ -24,6 +26,7 @@ def _make_config(anthropic_key="", openrouter_key="", ollama_cloud_key="", googl
             openrouter=ProviderConfig(api_key=openrouter_key),
             **{"ollama-cloud": ProviderConfig(api_key=ollama_cloud_key)},
             google=ProviderConfig(api_key=google_key),
+            azure=AzureConfig(api_key=azure_key, resource_name=azure_resource),
         ),
     )
 
@@ -88,6 +91,27 @@ class TestValidateAgentModels:
         with caplog.at_level(logging.WARNING, logger="gateway.agents.loader"):
             validate_agent_models(agents, config)
         assert "google" in caplog.text.lower()
+
+    def test_configured_azure_no_warning(self, caplog):
+        config = _make_config(azure_key="az-key", azure_resource="my-resource")
+        agents = {"agent": _make_agent("azure/gpt-4o")}
+        with caplog.at_level(logging.WARNING, logger="gateway.agents.loader"):
+            validate_agent_models(agents, config)
+        assert caplog.text == ""
+
+    def test_unconfigured_azure_warns(self, caplog):
+        config = _make_config(azure_key="", azure_resource="")
+        agents = {"agent": _make_agent("azure/gpt-4o")}
+        with caplog.at_level(logging.WARNING, logger="gateway.agents.loader"):
+            validate_agent_models(agents, config)
+        assert "azure" in caplog.text.lower()
+
+    def test_azure_missing_resource_warns(self, caplog):
+        config = _make_config(azure_key="az-key", azure_resource="")
+        agents = {"agent": _make_agent("azure/gpt-4o")}
+        with caplog.at_level(logging.WARNING, logger="gateway.agents.loader"):
+            validate_agent_models(agents, config)
+        assert "azure" in caplog.text.lower()
 
     def test_unrecognized_prefix_logs_error(self, caplog):
         config = _make_config(anthropic_key="key")

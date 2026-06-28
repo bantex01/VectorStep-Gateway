@@ -1,0 +1,7 @@
+name: azure-gpt4o-analyst
+model: azure/gpt-4o              # deployment name you configured in Azure AI Foundry
+max_tokens: 4096
+model_fallbacks:
+  - azure/gpt-4o-mini            # cheaper fallback deployment
+  - anthropic/claude-haiku-4-5-20251001  # cross-provider fallback if Azure is unavailable
+tools: []    # add MCP server names as needed

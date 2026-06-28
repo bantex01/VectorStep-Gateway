@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from gateway.llm.providers.anthropic import AnthropicProvider
+from gateway.llm.providers.azure import AzureOpenAIProvider
 from gateway.llm.providers.base import BaseProvider
 from gateway.llm.providers.google import GoogleProvider
 from gateway.llm.providers.ollama import OllamaCloudProvider, OllamaProvider
@@ -28,14 +29,20 @@ class LLMRouter:
         """Return (provider, bare_model_name) for the given model string.
 
         Prefix rules:
-          openrouter/<model>  → OpenRouterProvider, model = everything after prefix
-          anthropic/<model>   → AnthropicProvider,  model = everything after prefix
-          <bare>              → AnthropicProvider,  model = <bare>
+          openrouter/<model>  → OpenRouterProvider,    model = everything after prefix
+          anthropic/<model>   → AnthropicProvider,     model = everything after prefix
+          azure/<model>       → AzureOpenAIProvider,   model = deployment name after prefix
+          google/<model>      → GoogleProvider,        model = everything after prefix
+          ollama/<model>      → OllamaProvider,        model = everything after prefix
+          ollama-cloud/<model>→ OllamaCloudProvider,   model = everything after prefix
+          <bare>              → AnthropicProvider,     model = <bare>
         """
         if model_string.startswith("openrouter/"):
             return self._openrouter(), model_string[len("openrouter/"):]
         if model_string.startswith("anthropic/"):
             return self._anthropic(), model_string[len("anthropic/"):]
+        if model_string.startswith("azure/"):
+            return self._azure(), model_string[len("azure/"):]
         if model_string.startswith("ollama/"):
             return self._ollama(), model_string[len("ollama/"):]
         if model_string.startswith("ollama-cloud/"):
@@ -92,3 +99,14 @@ class LLMRouter:
                 timeout=float(self._config.limits.request_timeout_seconds),
             )
         return self._providers["google"]  # type: ignore[return-value]
+
+    def _azure(self) -> AzureOpenAIProvider:
+        if "azure" not in self._providers:
+            cfg = self._config.providers.azure
+            self._providers["azure"] = AzureOpenAIProvider(
+                api_key=cfg.api_key,
+                resource_name=cfg.resource_name,
+                api_version=cfg.api_version,
+                timeout=float(self._config.limits.request_timeout_seconds),
+            )
+        return self._providers["azure"]  # type: ignore[return-value]
