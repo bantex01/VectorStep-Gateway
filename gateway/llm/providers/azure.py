@@ -74,7 +74,10 @@ class AzureOpenAIProvider(BaseProvider):
         all_messages = [{"role": "system", "content": system}, *messages]
 
         payload: dict = {
-            "max_tokens": max_tokens,
+            # max_completion_tokens works across both classic (gpt-4o) and reasoning
+            # (gpt-5/o1/o3) deployments; the older max_tokens param is rejected outright
+            # by reasoning-family models.
+            "max_completion_tokens": max_tokens,
             "messages": all_messages,
         }
         if tools:

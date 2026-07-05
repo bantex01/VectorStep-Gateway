@@ -251,9 +251,11 @@ model_fallbacks:
   - anthropic/claude-haiku-4-5-20251001  # cross-provider fallback
 ```
 
-Azure's API is OpenAI-compatible. The only differences handled internally are the endpoint URL format and the `api-key` request header (instead of `Authorization: Bearer`). Extended thinking is not available on Azure OpenAI.
+Azure's API is OpenAI-compatible. The differences handled internally are the endpoint URL format, the `api-key` request header (instead of `Authorization: Bearer`), and the `max_completion_tokens` parameter (Azure's chat completions API, like OpenAI's, rejects `max_tokens` for reasoning-family deployments — the provider sends `max_completion_tokens` on the wire regardless of deployment, translated transparently from the agent's `max_tokens` field). Extended thinking is not available on Azure OpenAI.
 
 The key name in `providers:` config must match the prefix in the model string exactly.
+
+**Reasoning-family deployments (gpt-5, o1, o3) and token budgets:** these models spend part of their `max_tokens` budget on hidden internal reasoning before producing any visible output. A budget that's fine for `gpt-4o` (e.g. `max_tokens: 200`) can come back with `stop_reason: length` and zero visible text on `gpt-5` because reasoning consumed the whole budget. Set `max_tokens` generously (2000+) for reasoning-family deployments to leave headroom for actual output.
 
 ---
 

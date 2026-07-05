@@ -70,6 +70,9 @@ providers:
   #   api_key: ${AZURE_OPENAI_API_KEY}
   #   resource_name: ${AZURE_OPENAI_RESOURCE}  # e.g. "my-company-openai" → my-company-openai.openai.azure.com
   #   api_version: "2025-01-01-preview"        # optional — this is the default
+  #   # <deployment-name> is whatever you named the deployment in Azure AI Foundry, not
+  #   # the underlying model family. For reasoning-family deployments (gpt-5, o1, o3),
+  #   # set the agent's max_tokens generously (2000+) — see README §Azure OpenAI.
 
 logging:
   level: INFO     # DEBUG | INFO | WARNING | ERROR
