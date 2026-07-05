@@ -409,6 +409,26 @@ class TestToolCalls:
         assert result.text == "OpenAI done"
         assert result.tool_calls_made == 1
 
+    async def test_azure_prefix_uses_openai_compat_tool_path(self):
+        """azure/ must be treated as OpenAI-compat — same tool_calls/tool_use_id path as openrouter/."""
+        provider = FakeProvider([
+            ProviderResponse(
+                content_blocks=[{"type": "tool_use", "id": "c1", "name": "t", "input": {}}],
+                stop_reason="tool_calls",  # OpenAI-compat
+                model_used="azure/gpt-5",
+                usage={"input_tokens": 50, "output_tokens": 5},
+            ),
+            _text_response("Azure done", model="azure/gpt-5"),
+        ])
+        runner = AgentRunner(FakeRouter(provider))
+        result, _ = await _run(
+            runner,
+            _agent(model="azure/gpt-5"),
+            mcp=FakeMCPManager(),
+        )
+        assert result.text == "Azure done"
+        assert result.tool_calls_made == 1
+
 
 # ---------------------------------------------------------------------------
 # Max iterations

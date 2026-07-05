@@ -125,7 +125,7 @@ class AgentRunner:
                     candidate_string
                 )
                 candidate_is_openai_compat = candidate_string.startswith(
-                    ("openrouter/", "ollama/", "ollama-cloud/", "google/")
+                    ("openrouter/", "ollama/", "ollama-cloud/", "google/", "azure/")
                 )
                 candidate_tools = openai_tools if candidate_is_openai_compat else anthropic_tools
 
