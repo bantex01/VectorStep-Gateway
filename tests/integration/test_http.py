@@ -59,6 +59,12 @@ class TestAgentsEndpoint:
         assert sre["model"] == "anthropic/claude-sonnet-4-6"
         assert "tools" in sre
 
+    def test_agent_has_model_fallbacks(self, gateway_session):
+        client, _, _ = gateway_session
+        data = client.get("/agents").json()
+        sre = next(a for a in data["agents"] if a["name"] == "sre-triage")
+        assert sre["model_fallbacks"] == []
+
     def test_soul_endpoint_returns_content(self, gateway_session):
         client, _, _ = gateway_session
         response = client.get("/agents/sre-triage/soul")

@@ -96,7 +96,12 @@ async def get_metrics():
 @app.get("/agents")
 async def list_agents():
     agents: dict[str, AgentConfig] = _state.get("agents", {})
-    return {"agents": [{"name": a.name, "model": a.model, "tools": a.tools} for a in agents.values()]}
+    return {
+        "agents": [
+            {"name": a.name, "model": a.model, "model_fallbacks": a.model_fallbacks, "tools": a.tools}
+            for a in agents.values()
+        ]
+    }
 
 
 @app.get("/agents/{agent_name}/soul")

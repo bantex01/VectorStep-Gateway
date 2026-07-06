@@ -465,7 +465,7 @@ to completion for a response nobody will receive. Cancelled runs are recorded wi
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/health` | Service health — status, agent count, MCP server states, active run count |
-| `GET` | `/agents` | List loaded agents (name, model, tools) |
+| `GET` | `/agents` | List loaded agents (name, model, model_fallbacks, tools) |
 | `GET` | `/agents/{name}/soul` | Return the soul.md content for an agent |
 | `GET` | `/agents/{name}/agent` | Return the agent.yaml content for an agent |
 | `POST` | `/reload` | Reload all agent configs from disk |
