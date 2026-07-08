@@ -125,9 +125,16 @@ class AgentRunner:
                 candidate_provider, candidate_model_name = self._router.get_provider_and_model(
                     candidate_string
                 )
-                candidate_is_openai_compat = candidate_string.startswith(
-                    ("openrouter/", "ollama/", "ollama-cloud/", "google/", "azure/")
-                )
+                # Every provider except Anthropic expects tool defs in OpenAI's
+                # function-calling shape (even ollama-cloud, whose completions
+                # endpoint is native rather than OpenAI-compat — see its provider
+                # docstring). Deriving this from the canonical provider map means
+                # a newly added provider (e.g. "yolo") is classified correctly
+                # automatically, instead of needing this list updated by hand —
+                # forgetting to is exactly what sent Anthropic-shaped tool defs
+                # to an OpenAI-compat endpoint and got "tools[0].function: Field
+                # required" back from the upstream API.
+                candidate_is_openai_compat = provider_key_for_model_string(candidate_string) != "anthropic"
                 candidate_tools = openai_tools if candidate_is_openai_compat else anthropic_tools
 
                 for attempt in range(limits.llm_retry_attempts + 1):
