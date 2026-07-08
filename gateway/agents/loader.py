@@ -5,21 +5,12 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 
+from gateway.llm.router import PREFIX_TO_PROVIDER
 from gateway.models.agent import AgentConfig
 from gateway.models.config import GatewayConfig
 
 logger = logging.getLogger(__name__)
 
-# Maps the model-string prefix (as used in agent.yaml) to the provider field name
-# on ProvidersConfig. Must stay in sync with LLMRouter.get_provider_and_model.
-_PREFIX_TO_PROVIDER: dict[str, str] = {
-    "anthropic/": "anthropic",
-    "openrouter/": "openrouter",
-    "ollama/": "ollama",         # ollama-local in config
-    "ollama-cloud/": "ollama_cloud",
-    "google/": "google",
-    "azure/": "azure",
-}
 # Providers that work without an api_key (local Ollama uses no auth by default).
 _KEY_NOT_REQUIRED = {"ollama"}
 
@@ -76,12 +67,13 @@ def validate_agent_models(agents: dict[str, AgentConfig], config: GatewayConfig)
         "ollama_cloud": bool(providers.ollama_cloud.api_key),
         "google": bool(providers.google.api_key),
         "azure": bool(providers.azure.api_key and providers.azure.resource_name),
+        "yolo": bool(providers.yolo.api_key),
     }
 
     for agent_name, agent in agents.items():
         for model_string in [agent.model, *agent.model_fallbacks]:
             provider_key: str | None = None
-            for prefix, pkey in _PREFIX_TO_PROVIDER.items():
+            for prefix, pkey in PREFIX_TO_PROVIDER.items():
                 if model_string.startswith(prefix):
                     provider_key = pkey
                     break
@@ -94,7 +86,7 @@ def validate_agent_models(agents: dict[str, AgentConfig], config: GatewayConfig)
                         " — will fail at request time. Known prefixes: %s",
                         agent_name,
                         model_string,
-                        ", ".join(p.rstrip("/") for p in _PREFIX_TO_PROVIDER),
+                        ", ".join(p.rstrip("/") for p in PREFIX_TO_PROVIDER),
                     )
                     continue
                 else:

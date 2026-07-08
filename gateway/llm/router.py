@@ -8,9 +8,38 @@ from gateway.llm.providers.base import BaseProvider
 from gateway.llm.providers.google import GoogleProvider
 from gateway.llm.providers.ollama import OllamaCloudProvider, OllamaProvider
 from gateway.llm.providers.openrouter import OpenRouterProvider
+from gateway.llm.providers.yolo import YoloProvider
 from gateway.models.config import GatewayConfig
 
 logger = logging.getLogger(__name__)
+
+# Canonical prefix → provider-key mapping. Single source of truth for "which
+# provider actually served this model string" — used by agent_runner.py to
+# report the provider that served a request (including after a cross-provider
+# model_fallback) and by agents/loader.py to validate agent.yaml model strings.
+# Must stay in sync with get_provider_and_model below.
+PREFIX_TO_PROVIDER: dict[str, str] = {
+    "anthropic/": "anthropic",
+    "openrouter/": "openrouter",
+    "ollama/": "ollama",              # ollama-local in config
+    "ollama-cloud/": "ollama_cloud",
+    "google/": "google",
+    "azure/": "azure",
+    "yolo/": "yolo",
+}
+
+
+def provider_key_for_model_string(model_string: str) -> str:
+    """Return the provider key that get_provider_and_model would route to.
+
+    Mirrors get_provider_and_model's own prefix matching (including the
+    bare-name-defaults-to-anthropic rule) without needing a live LLMRouter
+    instance — used to report which provider actually served a request.
+    """
+    for prefix, provider_key in PREFIX_TO_PROVIDER.items():
+        if model_string.startswith(prefix):
+            return provider_key
+    return "anthropic"
 
 
 class LLMRouter:
@@ -35,6 +64,7 @@ class LLMRouter:
           google/<model>      → GoogleProvider,        model = everything after prefix
           ollama/<model>      → OllamaProvider,        model = everything after prefix
           ollama-cloud/<model>→ OllamaCloudProvider,   model = everything after prefix
+          yolo/<model>        → YoloProvider,          model = everything after prefix
           <bare>              → AnthropicProvider,     model = <bare>
         """
         if model_string.startswith("openrouter/"):
@@ -49,6 +79,8 @@ class LLMRouter:
             return self._ollama_cloud(), model_string[len("ollama-cloud/"):]
         if model_string.startswith("google/"):
             return self._google(), model_string[len("google/"):]
+        if model_string.startswith("yolo/"):
+            return self._yolo(), model_string[len("yolo/"):]
         return self._anthropic(), model_string
 
     # ------------------------------------------------------------------
@@ -110,3 +142,13 @@ class LLMRouter:
                 timeout=float(self._config.limits.request_timeout_seconds),
             )
         return self._providers["azure"]  # type: ignore[return-value]
+
+    def _yolo(self) -> YoloProvider:
+        if "yolo" not in self._providers:
+            cfg = self._config.providers.yolo
+            self._providers["yolo"] = YoloProvider(
+                base_url=cfg.base_url or "",
+                api_key=cfg.api_key,
+                timeout=float(self._config.limits.request_timeout_seconds),
+            )
+        return self._providers["yolo"]  # type: ignore[return-value]

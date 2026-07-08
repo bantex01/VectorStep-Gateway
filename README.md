@@ -68,7 +68,8 @@ P-Ork-Gateway/
 │   │       ├── openrouter.py         # OpenRouter via httpx (OpenAI-compat)
 │   │       ├── ollama.py             # Local Ollama (OpenAI-compat) + Ollama Cloud (native)
 │   │       ├── google.py             # Google Gemini via OpenAI-compat endpoint
-│   │       └── azure.py             # Azure OpenAI (OpenAI-compat, api-key header auth)
+│   │       ├── azure.py             # Azure OpenAI (OpenAI-compat, api-key header auth)
+│   │       └── yolo.py              # Generic OpenAI-compat custom endpoint
 │   ├── runner/agent_runner.py        # Full agentic loop: LLM ↔ MCP tool calls
 │   └── models/
 │       ├── config.py                 # GatewayConfig, ProviderConfig, LimitsConfig, OtelConfig
@@ -151,6 +152,9 @@ providers:
     api_key: ${AZURE_OPENAI_API_KEY}
     resource_name: ${AZURE_OPENAI_RESOURCE}   # e.g. "my-company-openai"
     api_version: "2025-01-01-preview"         # optional, this is the default
+  yolo:
+    api_key: ${YOLO_API_KEY}
+    base_url: https://your-provider.example.com/v1
 ```
 
 Most providers support `api_key` and `base_url`. Azure uses different fields:
@@ -178,6 +182,7 @@ Most providers support `api_key` and `base_url`. Azure uses different fields:
 | `ollama-cloud` | `https://ollama.com/api` | Native Ollama `/api/chat` endpoint |
 | `google` | `https://generativelanguage.googleapis.com/v1beta/openai` | OpenAI-compat |
 | `azure` | `https://{resource_name}.openai.azure.com/openai/deployments/{deployment}/chat/completions` | OpenAI-compat, auth via `api-key` header |
+| `yolo` | None — `base_url` required | Generic OpenAI-compat custom endpoint, e.g. a self-hosted or third-party API |
 
 ### `logging`
 
@@ -235,6 +240,7 @@ The prefix in a model string determines which provider handles the call:
 | `ollama-cloud/gemma3:27b` | Ollama Cloud | Native Ollama `/api/chat` |
 | `google/gemini-2.0-flash` | Google Gemini | OpenAI-compat |
 | `azure/gpt-4o` | Azure OpenAI | OpenAI-compat; `gpt-4o` is the deployment name |
+| `yolo/some-model` | Yolo (custom endpoint) | OpenAI-compat, `base_url` from `providers.yolo` |
 | `claude-sonnet-4-6` | Anthropic | Bare name (no prefix) defaults to Anthropic |
 
 ### Azure OpenAI
@@ -418,6 +424,8 @@ The gateway sends **multiple frames** with the same request `id`: one accepted f
 ```
 
 On error, the final frame is: `{"type": "res", "id": "uuid-2", "ok": false, "error": {"message": "..."}}`
+
+`agentMeta.provider` is the provider key (`anthropic`, `openrouter`, `azure`, etc.) that actually served the request — if `model_fallbacks` kicked in and a later candidate from a *different* provider ended up serving it, `provider` reflects that final candidate, not the originally requested model. This is deliberately distinct from `agentMeta.model`, which is whatever the underlying LLM API itself reports as the model name — for most OpenAI-compat providers that's the raw vendor model id (e.g. OpenRouter reports `"deepseek/deepseek-v4-pro-..."`, not `"openrouter/deepseek/..."`), so `model` alone can't be used to reliably reconstruct which provider served a call.
 
 ### Trace Event Types
 

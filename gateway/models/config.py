@@ -50,6 +50,7 @@ class ProvidersConfig(BaseModel):
     ollama_cloud: ProviderConfig = Field(default_factory=ProviderConfig, alias="ollama-cloud")
     google: ProviderConfig = Field(default_factory=ProviderConfig)
     azure: AzureConfig = Field(default_factory=AzureConfig)
+    yolo: ProviderConfig = Field(default_factory=ProviderConfig)
 
 
 class LoggingConfig(BaseModel):

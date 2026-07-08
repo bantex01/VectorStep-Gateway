@@ -10,7 +10,7 @@ from opentelemetry import trace
 from pydantic import BaseModel
 
 from gateway.llm.providers.base import ProviderError
-from gateway.llm.router import LLMRouter
+from gateway.llm.router import LLMRouter, provider_key_for_model_string
 from gateway.llm.tool_translator import (
     mcp_result_to_anthropic,
     mcp_result_to_openrouter,
@@ -47,6 +47,7 @@ def _dedupe_preserve_order(items: list[str]) -> list[str]:
 class AgentRunResult(BaseModel):
     text: str
     model_used: str
+    provider: str
     duration_ms: int
     tool_calls_made: int
     iterations: int
@@ -270,6 +271,9 @@ class AgentRunner:
                         return AgentRunResult(
                             text=text,
                             model_used=model_used,
+                            # model_string is the candidate that actually succeeded (post
+                            # cross-provider fallback) — not the originally requested model.
+                            provider=provider_key_for_model_string(model_string),
                             duration_ms=int((time.monotonic() - start) * 1000),
                             tool_calls_made=tool_calls_made,
                             iterations=iterations,

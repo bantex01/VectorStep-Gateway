@@ -12,6 +12,7 @@ def _text_result(text="Test response"):
     return AgentRunResult(
         text=text,
         model_used="claude-sonnet-4-6",
+        provider="anthropic",
         duration_ms=42,
         tool_calls_made=0,
         iterations=1,

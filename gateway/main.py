@@ -344,19 +344,6 @@ async def rpc(ws: WebSocket):
                 try:
                     result = await run_task
 
-                    # Derive provider name from the model string used
-                    effective_model = model_override or agent.model
-                    if effective_model.startswith("openrouter/"):
-                        provider_name = "openrouter"
-                    elif effective_model.startswith("ollama/"):
-                        provider_name = "ollama"
-                    elif effective_model.startswith("ollama-cloud/"):
-                        provider_name = "ollama-cloud"
-                    elif effective_model.startswith("google/"):
-                        provider_name = "google"
-                    else:
-                        provider_name = "anthropic"
-
                     # Frame 2: ok with real result
                     await ws.send_json({
                         "type": "res",
@@ -371,7 +358,7 @@ async def rpc(ws: WebSocket):
                                 "meta": {
                                     "durationMs": result.duration_ms,
                                     "agentMeta": {
-                                        "provider": provider_name,
+                                        "provider": result.provider,
                                         "model": result.model_used,
                                         "usage": result.usage,
                                     },
