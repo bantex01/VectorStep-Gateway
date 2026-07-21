@@ -108,6 +108,7 @@ The operator token (used by P-Ork to authenticate) is written to `<path>/device-
 | `llm_retry_attempts` | `2` | Retries on the *same* model after a retryable error (429/5xx/529/timeout/connection error) before falling over to the next entry in `model_fallbacks` |
 | `llm_retry_base_delay_seconds` | `1.0` | Base delay for exponential backoff between retries (doubles each attempt: 1s, 2s, 4s, …) |
 | `max_concurrent_runs` | `10` | Gateway-wide cap on simultaneously executing agent runs. Once at capacity, new requests are still accepted (`Frame 1`) but queue until a slot frees up. |
+| `trace_tool_result_max_chars` | `3000` | Gateway-wide default cap on a `tool_result` trace event's `content`, truncated with a trailing `"… [truncated]"` marker. This **only** affects the trace copy — the streamed/persisted record a caller (or a downstream grounding judge) inspects. The LLM conversation itself always receives the tool's full, untruncated output regardless of this setting; nothing about the agent's own reasoning is affected by it. A caller can override this per-request via the agent request's `traceToolResultMax` (see below) without changing the gateway-wide default. |
 
 ### `mcp_servers`
 
@@ -382,6 +383,7 @@ The gateway sends **multiple frames** with the same request `id`: one accepted f
     "message": "Assess this alert: ...",
     "model": "anthropic/claude-opus-4-8",    // optional — overrides agent.yaml default
     "thinkingLevel": "medium",               // optional — Anthropic models only
+    "traceToolResultMax": 8000,               // optional — overrides limits.trace_tool_result_max_chars for this request only
     "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"  // injected by P-Ork
   }
 }
@@ -437,7 +439,7 @@ On error, the final frame is: `{"type": "res", "id": "uuid-2", "ok": false, "err
 | `thinking` | `content` | Extended thinking block (Anthropic only) |
 | `text` | `content` | Text output block from the LLM |
 | `tool_call` | `name`, `input` | Tool call about to be executed |
-| `tool_result` | `name`, `content`, `is_error` | Result returned from MCP tool |
+| `tool_result` | `name`, `content`, `is_error` | Result returned from MCP tool. `content` is capped at `limits.trace_tool_result_max_chars` (default 3000, overridable per-request via `traceToolResultMax` — see `limits` above) — this is a trace-only truncation; the LLM's own conversation always sees the full result. |
 
 ### Session Keys
 

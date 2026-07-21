@@ -15,6 +15,11 @@ limits:
   llm_retry_attempts: 2            # retries on the same model before falling over to model_fallbacks
   llm_retry_base_delay_seconds: 1.0  # exponential backoff base delay between retries
   max_concurrent_runs: 10          # gateway-wide cap on simultaneously executing agent runs
+  trace_tool_result_max_chars: 3000  # gateway-wide default cap on a tool_result's TRACE copy
+                                      # (observability/downstream judges only — the LLM
+                                      # conversation itself always gets the full, untruncated
+                                      # result regardless of this setting). A caller can
+                                      # override this per-request via traceToolResultMax.
 
 # MCP tool servers — each is spawned as a subprocess on gateway startup.
 # Remove servers you don't need. All env values support ${VAR_NAME} resolution.

@@ -284,6 +284,7 @@ async def rpc(ws: WebSocket):
                 message_text = params.get("message", "")
                 model_override = params.get("model") or None
                 thinking_level = params.get("thinkingLevel") or None
+                trace_tool_result_max = params.get("traceToolResultMax") or None
                 remote_ctx = extract_remote_context(params)
 
                 async def _send_trace_event(event: dict) -> None:
@@ -308,6 +309,7 @@ async def rpc(ws: WebSocket):
                             limits=config.limits,
                             on_trace_event=_send_trace_event,
                             remote_context=remote_ctx,
+                            trace_tool_result_max=trace_tool_result_max,
                         )
 
                 run_task = asyncio.create_task(_run_agent())

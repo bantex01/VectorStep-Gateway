@@ -13,6 +13,14 @@ class LimitsConfig(BaseModel):
     llm_retry_attempts: int = 2          # retries on the *same* model before falling over
     llm_retry_base_delay_seconds: float = 1.0  # doubles each attempt (exponential backoff)
     max_concurrent_runs: int = 10        # gateway-wide cap on simultaneously executing agent runs
+    trace_tool_result_max_chars: int = 3000  # gateway-wide default; a caller can override
+                                          # per-request via the run request's traceToolResultMax —
+                                          # this only caps the TRACE copy of a tool result (what's
+                                          # streamed/persisted for observability and any downstream
+                                          # judge to inspect); the LLM conversation itself always
+                                          # gets the tool's full, untruncated output regardless of
+                                          # this setting (see agent_runner.py's _emit vs the actual
+                                          # tool_results appended to `messages`).
 
 
 class ServerConfig(BaseModel):

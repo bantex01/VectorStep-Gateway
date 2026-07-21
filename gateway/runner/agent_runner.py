@@ -26,8 +26,6 @@ from gateway.tracing import tracer
 logger = logging.getLogger(__name__)
 
 
-_TRACE_TOOL_RESULT_MAX = 3000  # chars — tool results can be huge (filesystem reads etc.)
-
 # HTTP statuses worth retrying/falling back on. None (connection-level errors with
 # no status code, e.g. DNS/refused-connection/Anthropic APIConnectionError) is
 # treated as retryable too — see _call_llm.
@@ -74,9 +72,11 @@ class AgentRunner:
         limits: LimitsConfig,
         on_trace_event=None,  # Optional async callable(event: dict) — called after each trace event
         remote_context: otel_context.Context | None = None,
+        trace_tool_result_max: int | None = None,  # per-request override of limits.trace_tool_result_max_chars
     ) -> AgentRunResult:
         start = time.monotonic()
         record_agent_run_start()
+        trace_tool_result_max = trace_tool_result_max or limits.trace_tool_result_max_chars
 
         model_string = model_override or agent.model
         # Models to try in order for this run: the requested one, then
@@ -378,8 +378,8 @@ class AgentRunner:
                         result_text = "\n".join(
                             c.get("text", "") for c in result.content if c.get("type") == "text"
                         )
-                        if len(result_text) > _TRACE_TOOL_RESULT_MAX:
-                            result_text = result_text[:_TRACE_TOOL_RESULT_MAX] + "… [truncated]"
+                        if len(result_text) > trace_tool_result_max:
+                            result_text = result_text[:trace_tool_result_max] + "… [truncated]"
                         await _emit({
                             "type": "tool_result",
                             "name": tool_name,

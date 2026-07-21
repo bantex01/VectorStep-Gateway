@@ -111,7 +111,7 @@ def _tool_response(tool_name="my__tool", tool_id="call_1", args=None):
     )
 
 
-async def _run(runner, agent, mcp=None, model_override=None, limits=None):
+async def _run(runner, agent, mcp=None, model_override=None, limits=None, trace_tool_result_max=None):
     """Convenience wrapper: run and collect all trace events."""
     events = []
 
@@ -127,6 +127,7 @@ async def _run(runner, agent, mcp=None, model_override=None, limits=None):
         mcp_manager=mcp or FakeMCPManager(),
         limits=limits or _limits(),
         on_trace_event=on_event,
+        trace_tool_result_max=trace_tool_result_max,
     )
     return result, events
 
@@ -367,6 +368,60 @@ class TestToolCalls:
         result_events = [e for e in events if e["type"] == "tool_result"]
         assert len(result_events[0]["content"]) <= 3100
         assert "truncated" in result_events[0]["content"]
+
+    async def test_tool_result_truncation_honours_limits_config_default(self):
+        long_text = "x" * 500
+        mcp = FakeMCPManager(tool_results={
+            "big__tool": MCPToolResult(content=[{"type": "text", "text": long_text}], is_error=False)
+        })
+        provider = FakeProvider([_tool_response("big__tool"), _text_response()])
+        runner = AgentRunner(FakeRouter(provider))
+        limits = _limits()
+        limits.trace_tool_result_max_chars = 100
+
+        _, events = await _run(runner, _agent(), mcp=mcp, limits=limits)
+
+        result_events = [e for e in events if e["type"] == "tool_result"]
+        assert len(result_events[0]["content"]) <= 120
+        assert "truncated" in result_events[0]["content"]
+
+    async def test_tool_result_truncation_per_request_override_wins_over_limits_default(self):
+        long_text = "x" * 5000
+        mcp = FakeMCPManager(tool_results={
+            "big__tool": MCPToolResult(content=[{"type": "text", "text": long_text}], is_error=False)
+        })
+        provider = FakeProvider([_tool_response("big__tool"), _text_response()])
+        runner = AgentRunner(FakeRouter(provider))
+
+        _, events = await _run(runner, _agent(), mcp=mcp, trace_tool_result_max=8000)
+
+        result_events = [e for e in events if e["type"] == "tool_result"]
+        assert result_events[0]["content"] == long_text
+        assert "truncated" not in result_events[0]["content"]
+
+    async def test_llm_conversation_receives_full_untruncated_tool_result(self):
+        """The truncation only affects the TRACE copy — the actual conversation the LLM
+        reasons over must always see the full tool output, never the truncated one."""
+        long_text = "x" * 5000
+        mcp = FakeMCPManager(tool_results={
+            "big__tool": MCPToolResult(content=[{"type": "text", "text": long_text}], is_error=False)
+        })
+        seen_messages = []
+
+        class _CapturingProvider(FakeProvider):
+            async def complete(self, system, messages, tools, model, max_tokens, thinking_level=None):
+                seen_messages.append(messages)
+                return await super().complete(system, messages, tools, model, max_tokens, thinking_level)
+
+        provider = _CapturingProvider([_tool_response("big__tool"), _text_response()])
+        runner = AgentRunner(FakeRouter(provider))
+
+        await _run(runner, _agent(), mcp=mcp)
+
+        # The second complete() call includes the tool result appended to messages.
+        final_messages = seen_messages[-1]
+        serialised = str(final_messages)
+        assert long_text in serialised
 
     async def test_usage_accumulates_across_iterations(self):
         provider = FakeProvider([
