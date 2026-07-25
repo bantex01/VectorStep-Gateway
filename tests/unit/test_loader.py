@@ -3,13 +3,20 @@ import logging
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
-from gateway.agents.loader import load_agents, validate_agent_models
+from gateway.agents.loader import (
+    load_agents,
+    load_agents_from_raw,
+    provider_configured_map,
+    validate_agent_models,
+)
 from gateway.models.agent import AgentConfig
 from gateway.models.config import (
     AzureConfig,
     GatewayConfig,
     IdentityConfig,
+    MCPServerConfig,
     ProvidersConfig,
     ProviderConfig,
     ServerConfig,
@@ -17,7 +24,7 @@ from gateway.models.config import (
 
 
 def _make_config(anthropic_key="", openrouter_key="", ollama_cloud_key="", google_key="",
-                 azure_key="", azure_resource=""):
+                 azure_key="", azure_resource="", mcp_servers=None):
     return GatewayConfig(
         server=ServerConfig(),
         identity=IdentityConfig(),
@@ -28,6 +35,7 @@ def _make_config(anthropic_key="", openrouter_key="", ollama_cloud_key="", googl
             google=ProviderConfig(api_key=google_key),
             azure=AzureConfig(api_key=azure_key, resource_name=azure_resource),
         ),
+        mcp_servers=mcp_servers or {},
     )
 
 
@@ -200,3 +208,101 @@ class TestLoadAgents:
     def test_non_existent_dir_returns_empty(self, tmp_path):
         agents = load_agents(str(tmp_path / "does-not-exist"))
         assert agents == {}
+
+
+class TestLoadAgentsFromRaw:
+    """Strict counterpart to load_agents() — used by gateway/agent_writer.py to
+    validate a candidate agents/ directory before a write hits disk."""
+
+    def test_loads_valid_pair(self):
+        raw = {"sre-triage": (
+            yaml.dump({"name": "sre-triage", "model": "anthropic/claude-sonnet-4-6"}),
+            "You are sre-triage.",
+        )}
+        agents = load_agents_from_raw(raw, log_success=False)
+        assert "sre-triage" in agents
+        assert agents["sre-triage"].soul == "You are sre-triage."
+
+    def test_raises_on_invalid_yaml(self):
+        raw = {"bad": ("name: [unclosed", "soul")}
+        with pytest.raises(yaml.YAMLError):
+            load_agents_from_raw(raw, log_success=False)
+
+    def test_raises_on_name_mismatch(self):
+        raw = {"dir-name": (yaml.dump({"name": "other-name", "model": "anthropic/claude-sonnet-4-6"}), "soul")}
+        with pytest.raises(ValueError):
+            load_agents_from_raw(raw, log_success=False)
+
+    def test_raises_on_schema_error(self):
+        raw = {"no-model": (yaml.dump({"name": "no-model"}), "soul")}
+        with pytest.raises(ValidationError):
+            load_agents_from_raw(raw, log_success=False)
+
+
+class TestProviderConfiguredMap:
+    def test_reflects_configured_keys(self):
+        config = _make_config(anthropic_key="key", openrouter_key="")
+        result = provider_configured_map(config)
+        assert result["anthropic"] is True
+        assert result["openrouter"] is False
+
+    def test_ollama_local_always_true(self):
+        config = _make_config()
+        assert provider_configured_map(config)["ollama"] is True
+
+    def test_azure_requires_both_key_and_resource(self):
+        config = _make_config(azure_key="key", azure_resource="")
+        assert provider_configured_map(config)["azure"] is False
+        config = _make_config(azure_key="key", azure_resource="my-resource")
+        assert provider_configured_map(config)["azure"] is True
+
+
+class TestValidateAgentModelsToolReferences:
+    def test_unconfigured_tool_server_returns_error(self, caplog):
+        config = _make_config(mcp_servers={})
+        agents = {"agent": AgentConfig(name="agent", model="anthropic/claude-sonnet-4-6",
+                                        tools=["missing-server"])}
+        with caplog.at_level(logging.ERROR, logger="gateway.agents.loader"):
+            results = validate_agent_models(agents, config)
+        errors = [r for r in results if r["field"] == "tools"]
+        assert len(errors) == 1
+        assert errors[0]["severity"] == "error"
+        assert "missing-server" in errors[0]["message"]
+        assert "missing-server" in caplog.text
+
+    def test_configured_tool_server_no_error(self):
+        config = _make_config(mcp_servers={"filesystem": MCPServerConfig(command="npx")})
+        agents = {"agent": AgentConfig(name="agent", model="anthropic/claude-sonnet-4-6",
+                                        tools=["filesystem"])}
+        results = validate_agent_models(agents, config)
+        assert not [r for r in results if r["field"] == "tools"]
+
+    def test_scoped_tool_dict_form_checked_by_server_name(self):
+        config = _make_config(mcp_servers={})
+        agents = {"agent": AgentConfig(name="agent", model="anthropic/claude-sonnet-4-6",
+                                        tools=[{"missing-server": ["some_tool"]}])}
+        results = validate_agent_models(agents, config)
+        assert any(r["field"] == "tools" and r["value"] == "missing-server" for r in results)
+
+
+class TestValidateAgentModelsReturnValue:
+    def test_unrecognized_prefix_is_error_severity(self):
+        config = _make_config(anthropic_key="key")
+        agents = {"agent": AgentConfig(name="agent", model="made-up/some-model")}
+        results = validate_agent_models(agents, config)
+        model_errors = [r for r in results if r["field"] == "model"]
+        assert len(model_errors) == 1
+        assert model_errors[0]["severity"] == "error"
+
+    def test_missing_api_key_is_warning_severity(self):
+        config = _make_config(anthropic_key="")
+        agents = {"agent": AgentConfig(name="agent", model="claude-sonnet-4-6")}
+        results = validate_agent_models(agents, config)
+        model_warnings = [r for r in results if r["field"] == "model"]
+        assert len(model_warnings) == 1
+        assert model_warnings[0]["severity"] == "warning"
+
+    def test_valid_agent_returns_no_results(self):
+        config = _make_config(anthropic_key="key", mcp_servers={"filesystem": MCPServerConfig(command="npx")})
+        agents = {"agent": AgentConfig(name="agent", model="anthropic/claude-sonnet-4-6", tools=["filesystem"])}
+        assert validate_agent_models(agents, config) == []

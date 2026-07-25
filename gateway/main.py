@@ -6,12 +6,18 @@ import uuid
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
-from gateway.agents.loader import install_sighup_handler, load_agents, validate_agent_models
+from gateway.agent_writer import WriteResult, delete_agent as delete_agent_files, validate_agent as validate_agent_files, write_agent
+from gateway.agents.loader import (
+    install_sighup_handler,
+    load_agents,
+    provider_configured_map,
+    validate_agent_models,
+)
 from gateway.auth.device import bootstrap_identity, get_operator_token
-from gateway.llm.router import LLMRouter
+from gateway.llm.router import PREFIX_TO_PROVIDER, LLMRouter
 from gateway.mcp.manager import MCPManager
 from gateway.models.agent import AgentConfig
 from gateway.models.config import GatewayConfig, load_config
@@ -123,6 +129,133 @@ async def get_agent_config_file(agent_name: str):
     if not yaml_path.exists():
         return JSONResponse(status_code=404, content={"error": "agent.yaml not found"})
     return {"name": agent_name, "content": yaml_path.read_text()}
+
+
+@app.get("/agents/{agent_name}")
+async def get_agent(agent_name: str):
+    """Combined structured view of one agent — parsed config + soul.md text +
+    the raw agent.yaml text (for round-trip editing), in one call instead of
+    the two separate raw endpoints above."""
+    agents: dict[str, AgentConfig] = _state.get("agents", {})
+    agent = agents.get(agent_name)
+    if not agent:
+        return JSONResponse(status_code=404, content={"error": f"Agent '{agent_name}' not found"})
+    config: GatewayConfig = _state["config"]
+    yaml_path = Path(config.agents_dir) / agent_name / "agent.yaml"
+    return {
+        "name": agent.name,
+        "config": agent.model_dump(exclude={"soul"}),
+        "agent_yaml": yaml_path.read_text() if yaml_path.exists() else "",
+        "soul_md": agent.soul,
+    }
+
+
+@app.get("/providers")
+async def list_providers():
+    """Configured providers + their model-string prefix — no keys, no live
+    model enumeration (a caller composes model strings as '<prefix><model>',
+    or bare for anthropic)."""
+    config: GatewayConfig = _state["config"]
+    configured = provider_configured_map(config)
+    prefix_by_provider = {v: k for k, v in PREFIX_TO_PROVIDER.items()}
+    return {
+        "providers": [
+            {
+                "name": name,
+                "configured": is_configured,
+                "prefix": prefix_by_provider.get(name),  # None for anthropic (bare model names route there)
+            }
+            for name, is_configured in configured.items()
+        ]
+    }
+
+
+def _raise_for_write_result(result: WriteResult) -> None:
+    if result.ok:
+        return
+    status = {"validation": 400, "not_found": 404, "collision": 409}.get(result.error_type, 500)
+    # Carry the error type explicitly rather than making callers (e.g. the
+    # gateway MCP's error mapping) guess it from status code + message text.
+    detail = {"type": result.error_type, "message": result.error_message, **result.error_detail}
+    raise HTTPException(status_code=status, detail=detail)
+
+
+_AGENT_WRITE_NOTE = "Files written and reloaded. agents/ is gitignored, so this is not a git-commit concern."
+
+
+@app.post("/agents")
+async def create_agent(request: Request):
+    body = await request.json()
+    name = body.get("name")
+    agent_yaml_text = body.get("agent_yaml")
+    soul_md_text = body.get("soul_md")
+    if not isinstance(name, str) or not name:
+        raise HTTPException(status_code=400, detail="Body must include a 'name' string field")
+    if not isinstance(agent_yaml_text, str) or not isinstance(soul_md_text, str):
+        raise HTTPException(status_code=400, detail="Body must include 'agent_yaml' and 'soul_md' string fields")
+    overwrite = bool(body.get("overwrite", False))
+    config: GatewayConfig = _state["config"]
+
+    result = write_agent(config.agents_dir, config, name, agent_yaml_text, soul_md_text,
+                          is_update=False, overwrite=overwrite)
+    _raise_for_write_result(result)
+    _state["reload_fn"]()
+    return {"agent": result.config, "committed": False, "note": _AGENT_WRITE_NOTE}
+
+
+@app.put("/agents/{agent_name}")
+async def update_agent(agent_name: str, request: Request):
+    body = await request.json()
+    agent_yaml_text = body.get("agent_yaml")
+    soul_md_text = body.get("soul_md")
+    if agent_yaml_text is None and soul_md_text is None:
+        raise HTTPException(status_code=400, detail="Body must include at least one of 'agent_yaml'/'soul_md'")
+
+    config: GatewayConfig = _state["config"]
+    agent_dir = Path(config.agents_dir) / agent_name
+    if not (agent_dir / "agent.yaml").exists():
+        raise HTTPException(status_code=404, detail={"type": "not_found",
+                                                       "message": f"Agent '{agent_name}' not found"})
+    # Allow updating just one file — fill the other in from what's already on disk.
+    if agent_yaml_text is None:
+        agent_yaml_text = (agent_dir / "agent.yaml").read_text()
+    if soul_md_text is None:
+        soul_path = agent_dir / "soul.md"
+        soul_md_text = soul_path.read_text() if soul_path.exists() else ""
+
+    result = write_agent(config.agents_dir, config, agent_name, agent_yaml_text, soul_md_text, is_update=True)
+    _raise_for_write_result(result)
+    _state["reload_fn"]()
+    return {"agent": result.config, "committed": False, "note": _AGENT_WRITE_NOTE}
+
+
+@app.post("/agents/validate")
+async def validate_agent_endpoint(request: Request):
+    body = await request.json()
+    agent_yaml_text = body.get("agent_yaml")
+    soul_md_text = body.get("soul_md", "")
+    if not isinstance(agent_yaml_text, str):
+        raise HTTPException(status_code=400, detail="Body must include an 'agent_yaml' string field")
+    if not isinstance(soul_md_text, str):
+        soul_md_text = ""
+    config: GatewayConfig = _state["config"]
+    valid, errors = validate_agent_files(config.agents_dir, config, agent_yaml_text, soul_md_text)
+    return {"valid": valid, "errors": errors}
+
+
+@app.delete("/agents/{agent_name}")
+async def delete_agent_endpoint(agent_name: str):
+    config: GatewayConfig = _state["config"]
+    result = delete_agent_files(config.agents_dir, agent_name)
+    _raise_for_write_result(result)
+    _state["reload_fn"]()
+    return {
+        "deleted": agent_name,
+        "agent_yaml": result.config["agent_yaml"],
+        "soul_md": result.config["soul_md"],
+        "committed": False,
+        "note": "Directory removed and reloaded. agents/ is gitignored, so this is not a git-commit concern.",
+    }
 
 
 @app.post("/reload")

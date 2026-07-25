@@ -476,8 +476,14 @@ to completion for a response nobody will receive. Cancelled runs are recorded wi
 |---|---|---|
 | `GET` | `/health` | Service health — status, agent count, MCP server states, active run count |
 | `GET` | `/agents` | List loaded agents (name, model, model_fallbacks, tools) |
+| `GET` | `/agents/{name}` | Combined structured view of one agent — parsed config + soul.md + raw agent.yaml text |
 | `GET` | `/agents/{name}/soul` | Return the soul.md content for an agent |
 | `GET` | `/agents/{name}/agent` | Return the agent.yaml content for an agent |
+| `POST` | `/agents` | Create a new agent from raw `agent.yaml`/`soul.md` text — validates, writes, reloads |
+| `PUT` | `/agents/{name}` | Update an existing agent (either or both files) — validates, writes, reloads |
+| `DELETE` | `/agents/{name}` | Delete an agent — returns its prior `agent.yaml`/`soul.md` content for audit |
+| `POST` | `/agents/validate` | Dry-run validation of a candidate agent — no write |
+| `GET` | `/providers` | Configured providers + their model-string prefix (no API keys, no live model list) |
 | `POST` | `/reload` | Reload all agent configs from disk |
 | `GET` | `/mcp/tools` | List all tools across all MCP servers |
 | `GET` | `/mcp/servers` | List MCP server status (pid, tool count) |
@@ -500,6 +506,61 @@ to completion for a response nobody will receive. Cancelled runs are recorded wi
 ```
 
 `status` is `"ok"` when all configured MCP servers are running, `"degraded"` if any are down. A gateway with no MCP servers configured always returns `"ok"`. No authentication is required — suitable for Kubernetes liveness/readiness probes.
+
+### Agent management endpoints
+
+`POST /agents`, `PUT /agents/{name}`, and `DELETE /agents/{name}` are the write path behind the [Gateway MCP](#gateway-mcp-agent-authoring)'s `create_agent`/`update_agent`/`delete_agent` tools — an `agent.yaml`/`soul.md` pair is validated (schema **and** that `model`/`model_fallbacks` map to a configured provider and `tools:` map to configured `mcp_servers`), atomically written, and the live registry reloaded, all before the request returns. A candidate that fails validation never touches disk — see `gateway/agent_writer.py`.
+
+`POST /agents` request body:
+
+```json
+{
+  "name": "sre-triage",
+  "agent_yaml": "name: sre-triage\nmodel: anthropic/claude-sonnet-4-6\ntools: [grafana]\n",
+  "soul_md": "You are an SRE triage agent...",
+  "overwrite": false
+}
+```
+
+Success response (200):
+
+```json
+{
+  "agent": {"name": "sre-triage", "agent_yaml": "...", "soul_md": "..."},
+  "committed": false,
+  "note": "Files written and reloaded. agents/ is gitignored, so this is not a git-commit concern."
+}
+```
+
+`agents/` is gitignored (personal to the deployment, unlike P-Ork's git-controlled `pipelines/`), so `committed` is always `false` — there is nothing to commit.
+
+`PUT /agents/{name}` accepts `agent_yaml` and/or `soul_md` — omit one to leave that file untouched. The YAML's own `name:` field must always match the `name` used to create it (in the POST body) or the URL `{name}` (for PUT) — a rename is a delete + create, not an update.
+
+Error responses carry an explicit `type` so a caller never has to infer it from status code + message wording:
+
+```json
+// 400 — e.g. tools: references an unconfigured MCP server, or model maps to no known provider
+{"detail": {"type": "validation", "message": "...", "errors": [{"agent": "...", "field": "tools", "value": "...", "message": "...", "severity": "error"}]}}
+
+// 404 — PUT/DELETE on an agent that doesn't exist
+{"detail": {"type": "not_found", "message": "Agent 'x' not found"}}
+
+// 409 — POST on an existing name without overwrite: true
+{"detail": {"type": "collision", "message": "Agent 'x' already exists"}}
+```
+
+`POST /agents/validate` (body: `{"agent_yaml": "...", "soul_md": "..."}`, `soul_md` optional) runs the same checks with no write — returns `{"valid": bool, "errors": [...]}`. This is the safe iterate loop before calling `POST`/`PUT /agents`.
+
+`GET /providers` returns provider names, whether each has credentials configured, and the model-string prefix to use (e.g. `"openrouter/"`) — never API keys, and no live per-provider model enumeration:
+
+```json
+{"providers": [
+  {"name": "anthropic", "configured": true, "prefix": null},
+  {"name": "openrouter", "configured": false, "prefix": "openrouter/"}
+]}
+```
+
+(`prefix: null` for Anthropic — a bare model name with no prefix routes there by default, per [Model Routing](#model-routing).)
 
 ---
 
@@ -623,6 +684,16 @@ Steps within the same P-Ork pipeline can freely mix `executor: openclaw` and `ex
 | MCP tools | OpenClaw MCP servers | Gateway `mcp_servers:` config |
 | Thinking parameter | `thinking` | `thinkingLevel` |
 | OTel trace propagation | Not supported | Supported — joins P-Ork's trace |
+
+---
+
+## Gateway MCP (agent authoring)
+
+[`P-Ork-Gateway-MCP`](../P-Ork-Gateway-MCP) is a separate, standalone MCP server (own repo, own process) that exposes this gateway's agent-management and introspection surface — `list_agents`/`get_agent`/`list_mcp_servers`/`list_mcp_tools`/`list_providers`/`get_metrics`/`validate_agent` for reads, `create_agent`/`update_agent`/`delete_agent`/`reload` for writes — to an MCP client (Claude Code/Desktop), so an agent's `agent.yaml`/`soul.md` can be authored conversationally instead of by hand-editing files on the host running the gateway.
+
+It talks to this gateway only over the REST endpoints above (the `/agents`/`/providers` family) — no shared code, no imports of `gateway.*`. It holds the **operator token** (`GATEWAY_OPERATOR_TOKEN`, the value in `<identity>/device-auth.json`) and never returns it, a provider API key, or any other `config.yaml` secret from any tool. See that repo's README for setup.
+
+This is the agent-authoring counterpart to [P-Ork's own MCP server](../P-Ork-Service-MCP), which handles pipelines/steps — the two have non-overlapping tool sets (agents live here; pipelines live in P-Ork).
 
 ---
 
