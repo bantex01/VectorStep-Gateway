@@ -7,7 +7,6 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
 
 from gateway.agent_writer import WriteResult, delete_agent as delete_agent_files, validate_agent as validate_agent_files, write_agent
 from gateway.agents.loader import (
@@ -115,7 +114,8 @@ async def get_agent_soul(agent_name: str):
     agents: dict[str, AgentConfig] = _state.get("agents", {})
     agent = agents.get(agent_name)
     if not agent:
-        return JSONResponse(status_code=404, content={"error": f"Agent '{agent_name}' not found"})
+        raise HTTPException(status_code=404, detail={"type": "not_found",
+                                                       "message": f"Agent '{agent_name}' not found"})
     return {"name": agent.name, "content": agent.soul}
 
 
@@ -123,11 +123,13 @@ async def get_agent_soul(agent_name: str):
 async def get_agent_config_file(agent_name: str):
     agents: dict[str, AgentConfig] = _state.get("agents", {})
     if agent_name not in agents:
-        return JSONResponse(status_code=404, content={"error": f"Agent '{agent_name}' not found"})
+        raise HTTPException(status_code=404, detail={"type": "not_found",
+                                                       "message": f"Agent '{agent_name}' not found"})
     config: GatewayConfig = _state["config"]
     yaml_path = Path(config.agents_dir) / agent_name / "agent.yaml"
     if not yaml_path.exists():
-        return JSONResponse(status_code=404, content={"error": "agent.yaml not found"})
+        raise HTTPException(status_code=404, detail={"type": "not_found",
+                                                       "message": "agent.yaml not found"})
     return {"name": agent_name, "content": yaml_path.read_text()}
 
 
@@ -139,7 +141,8 @@ async def get_agent(agent_name: str):
     agents: dict[str, AgentConfig] = _state.get("agents", {})
     agent = agents.get(agent_name)
     if not agent:
-        return JSONResponse(status_code=404, content={"error": f"Agent '{agent_name}' not found"})
+        raise HTTPException(status_code=404, detail={"type": "not_found",
+                                                       "message": f"Agent '{agent_name}' not found"})
     config: GatewayConfig = _state["config"]
     yaml_path = Path(config.agents_dir) / agent_name / "agent.yaml"
     return {
@@ -532,3 +535,11 @@ async def rpc(ws: WebSocket):
 
     except WebSocketDisconnect:
         pass
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    config_path = os.environ.get("PORK_GATEWAY_CONFIG", "config.yaml")
+    startup_config = load_config(config_path)
+    uvicorn.run(app, host=startup_config.server.host, port=startup_config.server.port)

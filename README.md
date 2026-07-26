@@ -27,8 +27,8 @@ mkdir -p agents/my-agent
 # 4. Set environment variables for any ${VAR_NAME} placeholders in config.yaml
 export ANTHROPIC_API_KEY=sk-ant-...
 
-# 5. Start the gateway
-uvicorn gateway.main:app --port 18780
+# 5. Start the gateway (host/port come from config.yaml's `server:` section)
+python -m gateway.main
 
 # 6. Find your operator token (auto-generated on first run)
 cat ~/.pork-gateway/identity/device-auth.json
