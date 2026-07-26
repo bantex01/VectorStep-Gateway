@@ -103,7 +103,8 @@ async def list_agents():
     agents: dict[str, AgentConfig] = _state.get("agents", {})
     return {
         "agents": [
-            {"name": a.name, "model": a.model, "model_fallbacks": a.model_fallbacks, "tools": a.tools}
+            {"name": a.name, "model": a.model, "model_fallbacks": a.model_fallbacks,
+             "tools": a.tools, "version": a.version}
             for a in agents.values()
         ]
     }
@@ -147,6 +148,7 @@ async def get_agent(agent_name: str):
     yaml_path = Path(config.agents_dir) / agent_name / "agent.yaml"
     return {
         "name": agent.name,
+        "version": agent.version,
         "config": agent.model_dump(exclude={"soul"}),
         "agent_yaml": yaml_path.read_text() if yaml_path.exists() else "",
         "soul_md": agent.soul,
@@ -498,6 +500,7 @@ async def rpc(ws: WebSocket):
                                     "agentMeta": {
                                         "provider": result.provider,
                                         "model": result.model_used,
+                                        "agentVersion": result.agent_version,   # NEW
                                         "usage": result.usage,
                                     },
                                     "aborted": False,

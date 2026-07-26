@@ -328,6 +328,11 @@ Good soul files are:
 - **Explicit about output format** — tell the model to return JSON only, no preamble
 - **Clear on confidence scoring** — explain what high/low confidence means for this agent's task
 
+Editing `agent.yaml` or `soul.md` changes the agent's `version` (a content hash over the
+agent's entire config, exposed as `agentMeta.agentVersion` and on the `GET /agents` /
+`GET /agents/{name}` endpoints) and therefore resets that agent's calibration history in
+P-Ork — see P-Ork's `CONFIDENCE-EXPLAINED.md`.
+
 ### Startup Config Validation
 
 When agents are loaded (at startup and on every `POST /reload` / SIGHUP), the gateway validates each agent's `model` and `model_fallbacks` against the configured providers:
@@ -410,6 +415,7 @@ The gateway sends **multiple frames** with the same request `id`: one accepted f
         "agentMeta": {
           "provider": "anthropic",
           "model": "claude-sonnet-4-6",
+          "agentVersion": "91f02ab3c7de",
           "usage": {"input_tokens": 1234, "output_tokens": 456}
         },
         "aborted": false
@@ -428,6 +434,8 @@ The gateway sends **multiple frames** with the same request `id`: one accepted f
 On error, the final frame is: `{"type": "res", "id": "uuid-2", "ok": false, "error": {"message": "..."}}`
 
 `agentMeta.provider` is the provider key (`anthropic`, `openrouter`, `azure`, etc.) that actually served the request — if `model_fallbacks` kicked in and a later candidate from a *different* provider ended up serving it, `provider` reflects that final candidate, not the originally requested model. This is deliberately distinct from `agentMeta.model`, which is whatever the underlying LLM API itself reports as the model name — for most OpenAI-compat providers that's the raw vendor model id (e.g. OpenRouter reports `"deepseek/deepseek-v4-pro-..."`, not `"openrouter/deepseek/..."`), so `model` alone can't be used to reliably reconstruct which provider served a call.
+
+`agentMeta.agentVersion` is a content hash of the agent's full config, including `soul.md` (see [Creating Agents](#creating-agents)) — it changes whenever `agent.yaml` or `soul.md` changes. P-Ork uses it to scope calibration buckets, so two runs under different `agentVersion`s are never pooled as evidence for the same track record.
 
 ### Trace Event Types
 
@@ -475,8 +483,8 @@ to completion for a response nobody will receive. Cancelled runs are recorded wi
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/health` | Service health — status, agent count, MCP server states, active run count |
-| `GET` | `/agents` | List loaded agents (name, model, model_fallbacks, tools) |
-| `GET` | `/agents/{name}` | Combined structured view of one agent — parsed config + soul.md + raw agent.yaml text |
+| `GET` | `/agents` | List loaded agents (name, model, model_fallbacks, tools, version) |
+| `GET` | `/agents/{name}` | Combined structured view of one agent — parsed config + soul.md + raw agent.yaml text + version |
 | `GET` | `/agents/{name}/soul` | Return the soul.md content for an agent |
 | `GET` | `/agents/{name}/agent` | Return the agent.yaml content for an agent |
 | `POST` | `/agents` | Create a new agent from raw `agent.yaml`/`soul.md` text — validates, writes, reloads |

@@ -46,7 +46,9 @@ def _build_agent(dir_name: str, agent_yaml_text: str, soul_md_text: str) -> Agen
         raise ValueError(
             f"Agent YAML name '{raw.get('name')}' does not match directory '{dir_name}'"
         )
-    return AgentConfig(**raw, soul=soul_md_text)
+    agent = AgentConfig(**raw, soul=soul_md_text)
+    agent.version = agent.compute_version()
+    return agent
 
 
 def load_agents_from_raw(

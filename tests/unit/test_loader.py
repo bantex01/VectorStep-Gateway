@@ -167,6 +167,24 @@ class TestLoadAgents:
         assert agents["sre-triage"].model == "anthropic/claude-sonnet-4-6"
         assert agents["sre-triage"].soul == "You are sre-triage."
 
+    def test_loaded_agent_has_version(self, tmp_path):
+        self._write_agent(tmp_path, "sre-triage")
+        agents = load_agents(str(tmp_path))
+        assert agents["sre-triage"].version != ""
+
+    def test_version_stable_across_separate_loads(self, tmp_path):
+        self._write_agent(tmp_path, "sre-triage")
+        first = load_agents(str(tmp_path))["sre-triage"].version
+        second = load_agents(str(tmp_path))["sre-triage"].version
+        assert first == second
+
+    def test_version_changes_when_soul_changes(self, tmp_path):
+        agent_dir = self._write_agent(tmp_path, "sre-triage")
+        before = load_agents(str(tmp_path))["sre-triage"].version
+        (agent_dir / "soul.md").write_text("A completely different persona.")
+        after = load_agents(str(tmp_path))["sre-triage"].version
+        assert before != after
+
     def test_loads_multiple_agents(self, tmp_path):
         self._write_agent(tmp_path, "triage")
         self._write_agent(tmp_path, "remediation")

@@ -91,6 +91,27 @@ class TestAgentsEndpoint:
         response = client.get("/agents/nonexistent/agent")
         assert response.status_code == 404
 
+    def test_list_agents_includes_version(self, gateway_session):
+        client, _, _ = gateway_session
+        data = client.get("/agents").json()
+        sre = next(a for a in data["agents"] if a["name"] == "sre-triage")
+        assert sre["version"] != ""
+
+    def test_get_agent_includes_version(self, gateway_session):
+        client, _, _ = gateway_session
+        response = client.get("/agents/sre-triage")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["name"] == "sre-triage"
+        assert data["version"] != ""
+        assert data["config"]["name"] == "sre-triage"
+        assert data["soul_md"]
+
+    def test_get_agent_404_for_unknown(self, gateway_session):
+        client, _, _ = gateway_session
+        response = client.get("/agents/nonexistent")
+        assert response.status_code == 404
+
 
 class TestReloadEndpoint:
     def test_returns_200(self, gateway_session):

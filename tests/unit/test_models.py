@@ -78,6 +78,60 @@ class TestAgentConfig:
         agent = AgentConfig(name="a", model="anthropic/claude-sonnet-4-6", max_tokens=1024)
         assert agent.tool_scopes() == {}
 
+    def test_version_defaults_empty(self):
+        agent = AgentConfig(name="a", model="anthropic/claude-sonnet-4-6", max_tokens=1024)
+        assert agent.version == ""
+
+
+class TestComputeVersion:
+    """See SPEC-prompt-versioning.md §3a — compute_version is the substrate P-Ork
+    uses to scope calibration buckets to an agent's actual behavioural definition."""
+
+    def _agent(self, **overrides):
+        defaults = dict(
+            name="test-agent", model="anthropic/claude-sonnet-4-6", max_tokens=1024,
+            soul="You are a test agent.",
+        )
+        defaults.update(overrides)
+        return AgentConfig(**defaults)
+
+    def test_stable_across_loads_for_unchanged_input(self):
+        assert self._agent().compute_version() == self._agent().compute_version()
+
+    def test_changes_when_soul_changes(self):
+        v1 = self._agent(soul="You are agent A.").compute_version()
+        v2 = self._agent(soul="You are agent B.").compute_version()
+        assert v1 != v2
+
+    def test_changes_when_model_changes(self):
+        v1 = self._agent(model="anthropic/claude-sonnet-4-6").compute_version()
+        v2 = self._agent(model="anthropic/claude-haiku-4-5").compute_version()
+        assert v1 != v2
+
+    def test_changes_when_tools_change(self):
+        v1 = self._agent(tools=["grafana"]).compute_version()
+        v2 = self._agent(tools=["grafana", "atlassian"]).compute_version()
+        assert v1 != v2
+
+    def test_ignores_version_field_itself(self):
+        # version isn't part of its own hash input, or setting it would be circular
+        agent = self._agent()
+        v1 = agent.compute_version()
+        agent.version = "some-other-hash"
+        assert agent.compute_version() == v1
+
+    def test_soul_whitespace_only_change_same_version(self):
+        # normalise_text strips trailing whitespace / leading+trailing blank lines,
+        # same conservative rule as P-Ork's prompt hashing (SPEC-prompt-versioning.md §2)
+        v1 = self._agent(soul="You are a test agent.").compute_version()
+        v2 = self._agent(soul="You are a test agent.  \n\n").compute_version()
+        assert v1 == v2
+
+    def test_returns_12_char_hex(self):
+        version = self._agent().compute_version()
+        assert len(version) == 12
+        int(version, 16)  # raises ValueError if not valid hex
+
 
 class TestLimitsConfig:
     def test_defaults(self):

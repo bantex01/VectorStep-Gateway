@@ -179,6 +179,15 @@ class TestSimpleTextResponse:
         assert result.usage["input_tokens"] == 100
         assert result.usage["output_tokens"] == 20
 
+    async def test_result_carries_agent_version(self):
+        provider = FakeProvider([_text_response()])
+        runner = AgentRunner(FakeRouter(provider))
+        agent = _agent()
+        agent.version = "abc123def456"
+        result, _ = await _run(runner, agent)
+
+        assert result.agent_version == "abc123def456"
+
     async def test_model_override_used(self):
         provider = FakeProvider([_text_response(model="claude-haiku-4-5")])
         runner = AgentRunner(FakeRouter(provider))

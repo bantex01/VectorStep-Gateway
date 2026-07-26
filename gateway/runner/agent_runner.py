@@ -51,6 +51,7 @@ class AgentRunResult(BaseModel):
     iterations: int
     usage: dict  # {"input_tokens": N, "output_tokens": N} accumulated across iterations
     trace: list[dict] = []  # ordered agent execution trace — always captured
+    agent_version: str = ""
 
 
 class AgentRunError(Exception):
@@ -289,6 +290,7 @@ class AgentRunner:
                                 "output_tokens": total_output_tokens,
                             },
                             trace=trace,
+                            agent_version=agent.version,
                         )
 
                     # ── Append assistant message ───────────────────────────────
