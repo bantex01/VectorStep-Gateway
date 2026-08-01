@@ -85,3 +85,5 @@ providers:
 
 logging:
   level: INFO     # DEBUG | INFO | WARNING | ERROR
+  dir: ./logs     # omit to disable file logging (stdout only)
+                  # creates gateway.log and access.log (rotating, 10 MB x 5)

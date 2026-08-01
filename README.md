@@ -190,6 +190,7 @@ Most providers support `api_key` and `base_url`. Azure uses different fields:
 | Field | Default | Description |
 |---|---|---|
 | `level` | `INFO` | Log level: `DEBUG`, `INFO`, `WARNING`, or `ERROR` |
+| `dir` | `""` (disabled) | Directory for rotating log files. Omit to log to stdout only. When set, creates `gateway.log` (all application logs, 10 MB x 5 rotating) and `access.log` (uvicorn HTTP access logs, kept separate so request noise doesn't pollute `gateway.log` or stdout) — same format and rotation policy as P-Ork's `service.log`/`access.log` split, so both services' logs can be correlated directly. |
 
 ### `observability`
 

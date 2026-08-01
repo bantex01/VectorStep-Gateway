@@ -63,6 +63,10 @@ class ProvidersConfig(BaseModel):
 
 class LoggingConfig(BaseModel):
     level: str = "INFO"
+    # Empty/omitted disables file logging (stdout only) — see gateway.main._setup_logging.
+    # When set, creates gateway.log and access.log (rotating, 10 MB x 5), mirroring
+    # P-Ork's service.log/access.log split.
+    dir: str = ""
 
 
 class OtelConfig(BaseModel):

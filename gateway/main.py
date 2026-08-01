@@ -28,15 +28,75 @@ from gateway.tracing import extract_remote_context, setup_tracing, shutdown_trac
 _state: dict = {}
 
 
+def _setup_logging(config: GatewayConfig) -> None:
+    """Configure logging at startup from config.yaml.
+
+    - gateway.log — all application logs (stdout + rotating file if logging.dir is set)
+    - access.log  — uvicorn HTTP access logs (file only; excluded from stdout)
+
+    Mirrors P-Ork's service/src/main.py:_setup_logging exactly (same format, same
+    rotation policy, same access-log separation) so both services' logs can be
+    grepped/sorted together — see SPEC-gateway-logging-uniformity.md.
+    """
+    from logging.handlers import RotatingFileHandler
+
+    level = getattr(logging, config.logging.level.upper(), logging.INFO)
+    log_dir = config.logging.dir
+
+    formatter = logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.setLevel(level)
+
+    stdout_handler = logging.StreamHandler()
+    stdout_handler.setFormatter(formatter)
+    root.addHandler(stdout_handler)
+
+    if log_dir:
+        abs_log_dir = os.path.abspath(log_dir)
+        os.makedirs(abs_log_dir, exist_ok=True)
+        gateway_handler = RotatingFileHandler(
+            os.path.join(abs_log_dir, "gateway.log"),
+            maxBytes=10 * 1024 * 1024,
+            backupCount=5,
+            encoding="utf-8",
+        )
+        gateway_handler.setFormatter(formatter)
+        root.addHandler(gateway_handler)
+        logging.getLogger(__name__).info("File logging enabled: %s", abs_log_dir)
+    else:
+        logging.getLogger(__name__).info("File logging disabled (logging.dir not set)")
+
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    # Detach uvicorn.access from the root logger so HTTP request lines don't
+    # appear in stdout or gateway.log. Route them to access.log if a log dir is set.
+    access_logger = logging.getLogger("uvicorn.access")
+    access_logger.propagate = False
+    access_logger.handlers.clear()
+    if log_dir:
+        access_handler = RotatingFileHandler(
+            os.path.join(abs_log_dir, "access.log"),
+            maxBytes=10 * 1024 * 1024,
+            backupCount=5,
+            encoding="utf-8",
+        )
+        access_handler.setFormatter(formatter)
+        access_logger.addHandler(access_handler)
+    else:
+        access_logger.addHandler(logging.NullHandler())
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     config_path = os.environ.get("PORK_GATEWAY_CONFIG", "config.yaml")
     config: GatewayConfig = load_config(config_path)
 
-    logging.basicConfig(
-        level=getattr(logging, config.logging.level.upper(), logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    _setup_logging(config)
 
     setup_tracing(config)
 
