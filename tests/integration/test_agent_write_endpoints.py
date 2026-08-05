@@ -40,11 +40,11 @@ def gateway_session(tmp_path_factory):
     config_file.write_text(yaml.dump(config_data))
 
     import os
-    old_config_env = os.environ.get("PORK_GATEWAY_CONFIG")
-    os.environ["PORK_GATEWAY_CONFIG"] = str(config_file)
+    old_config_env = os.environ.get("VECTORSTEP_GATEWAY_CONFIG")
+    os.environ["VECTORSTEP_GATEWAY_CONFIG"] = str(config_file)
 
     # gateway.main is imported fresh relative to this env var by the app's
-    # lifespan reading PORK_GATEWAY_CONFIG at startup — importing here (after
+    # lifespan reading VECTORSTEP_GATEWAY_CONFIG at startup — importing here (after
     # setting the env var) mirrors how tests/integration/conftest.py does it.
     from gateway.main import app
     with TestClient(app) as client:
@@ -54,9 +54,9 @@ def gateway_session(tmp_path_factory):
         yield client, operator_token, agents_dir
 
     if old_config_env is not None:
-        os.environ["PORK_GATEWAY_CONFIG"] = old_config_env
+        os.environ["VECTORSTEP_GATEWAY_CONFIG"] = old_config_env
     else:
-        os.environ.pop("PORK_GATEWAY_CONFIG", None)
+        os.environ.pop("VECTORSTEP_GATEWAY_CONFIG", None)
 
 
 class TestGetAgent:

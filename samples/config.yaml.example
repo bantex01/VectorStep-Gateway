@@ -5,7 +5,7 @@ server:
 agents_dir: ./agents    # directory containing agent subdirectories (gitignored — see templates/agents/)
 
 identity:
-  path: ~/.pork-gateway/identity   # auto-generated on first run if absent
+  path: ~/.vectorstep-gateway/identity   # auto-generated on first run if absent
 
 # Runtime limits — tune these for your environment
 limits:

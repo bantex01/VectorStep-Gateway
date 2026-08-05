@@ -34,7 +34,7 @@ def _setup_logging(config: GatewayConfig) -> None:
     - gateway.log — all application logs (stdout + rotating file if logging.dir is set)
     - access.log  — uvicorn HTTP access logs (file only; excluded from stdout)
 
-    Mirrors P-Ork's service/src/main.py:_setup_logging exactly (same format, same
+    Mirrors VectorStep's service/src/main.py:_setup_logging exactly (same format, same
     rotation policy, same access-log separation) so both services' logs can be
     grepped/sorted together — see SPEC-gateway-logging-uniformity.md.
     """
@@ -93,7 +93,7 @@ def _setup_logging(config: GatewayConfig) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    config_path = os.environ.get("PORK_GATEWAY_CONFIG", "config.yaml")
+    config_path = os.environ.get("VECTORSTEP_GATEWAY_CONFIG", "config.yaml")
     config: GatewayConfig = load_config(config_path)
 
     _setup_logging(config)
@@ -603,6 +603,6 @@ async def rpc(ws: WebSocket):
 if __name__ == "__main__":
     import uvicorn
 
-    config_path = os.environ.get("PORK_GATEWAY_CONFIG", "config.yaml")
+    config_path = os.environ.get("VECTORSTEP_GATEWAY_CONFIG", "config.yaml")
     startup_config = load_config(config_path)
     uvicorn.run(app, host=startup_config.server.host, port=startup_config.server.port)
