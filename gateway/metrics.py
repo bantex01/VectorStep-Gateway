@@ -1,6 +1,6 @@
-"""Prometheus metrics for the P-Ork Gateway.
+"""Prometheus metrics for the VectorStep Gateway.
 
-Unlike P-Ork (which fetches from SQLite on each scrape), the Gateway is
+Unlike VectorStep (which fetches from SQLite on each scrape), the Gateway is
 in-memory so metrics are updated incrementally via standard prometheus_client
 Counter/Gauge/Histogram objects.
 """
@@ -23,74 +23,74 @@ _ITERATION_BUCKETS = (1, 2, 3, 5, 8, 13, 20, float("inf"))
 # ── Metric definitions ──────────────────────────────────────────────
 
 _agent_runs_total = Counter(
-    "pork_gateway_agent_runs_total",
+    "vectorstep_gateway_agent_runs_total",
     "Total agent runs by agent, model, and terminal status",
     labelnames=["agent", "model", "status"],
 )
 
 _agent_runs_in_progress = Gauge(
-    "pork_gateway_agent_runs_in_progress",
+    "vectorstep_gateway_agent_runs_in_progress",
     "Currently executing agent runs",
 )
 
 _agent_run_duration = Histogram(
-    "pork_gateway_agent_run_duration_seconds",
+    "vectorstep_gateway_agent_run_duration_seconds",
     "Agent run wall-clock duration in seconds",
     labelnames=["agent"],
     buckets=_AGENT_DURATION_BUCKETS,
 )
 
 _agent_iterations = Histogram(
-    "pork_gateway_agent_iterations",
+    "vectorstep_gateway_agent_iterations",
     "Number of LLM iterations per agent run",
     labelnames=["agent"],
     buckets=_ITERATION_BUCKETS,
 )
 
 _agent_tool_calls = Counter(
-    "pork_gateway_agent_tool_calls_total",
+    "vectorstep_gateway_agent_tool_calls_total",
     "Total tool calls made during agent runs",
     labelnames=["agent"],
 )
 
 _llm_tokens = Counter(
-    "pork_gateway_llm_tokens_total",
+    "vectorstep_gateway_llm_tokens_total",
     "Total LLM tokens consumed",
     labelnames=["agent", "model", "direction"],
 )
 
 _tool_calls_total = Counter(
-    "pork_gateway_tool_calls_total",
+    "vectorstep_gateway_tool_calls_total",
     "Total MCP tool calls by server, tool, and result",
     labelnames=["mcp_server", "tool", "result"],
 )
 
 _tool_call_duration = Histogram(
-    "pork_gateway_tool_call_duration_seconds",
+    "vectorstep_gateway_tool_call_duration_seconds",
     "MCP tool call duration in seconds",
     labelnames=["mcp_server"],
     buckets=_TOOL_DURATION_BUCKETS,
 )
 
 _mcp_servers_running = Gauge(
-    "pork_gateway_mcp_servers_running",
+    "vectorstep_gateway_mcp_servers_running",
     "1 if MCP server is running, 0 otherwise",
     labelnames=["mcp_server"],
 )
 
 _mcp_restarts = Counter(
-    "pork_gateway_mcp_restarts_total",
+    "vectorstep_gateway_mcp_restarts_total",
     "Total MCP server restarts",
     labelnames=["mcp_server"],
 )
 
 _sessions_active = Gauge(
-    "pork_gateway_sessions_active",
+    "vectorstep_gateway_sessions_active",
     "Number of active sessions in the SessionManager",
 )
 
 _build_info = Info(
-    "pork_gateway",
+    "vectorstep_gateway",
     "Gateway build information",
 )
 

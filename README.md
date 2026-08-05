@@ -1,10 +1,10 @@
-# P-Ork Gateway
+# VectorStep Gateway
 
-A lightweight Python/FastAPI WebSocket gateway that runs AI agents with MCP tool access. It acts as an executor backend for [P-Ork](https://github.com/bantex01/P-Ork) pipelines, providing an alternative to OpenClaw with support for multiple LLM providers and configurable MCP tool servers.
+A lightweight Python/FastAPI WebSocket gateway that runs AI agents with MCP tool access. It acts as an executor backend for [VectorStep](https://github.com/bantex01/VectorStep) pipelines, providing an alternative to OpenClaw with support for multiple LLM providers and configurable MCP tool servers.
 
 ## Overview
 
-The gateway sits between P-Ork and your LLM providers. P-Ork sends an agent request over WebSocket; the gateway runs the full agentic loop (LLM calls, MCP tool execution, multi-turn conversation) and returns the final result. P-Ork never sees intermediate tool calls or thinking content — it gets one clean response.
+The gateway sits between VectorStep and your LLM providers. VectorStep sends an agent request over WebSocket; the gateway runs the full agentic loop (LLM calls, MCP tool execution, multi-turn conversation) and returns the final result. VectorStep never sees intermediate tool calls or thinking content — it gets one clean response.
 
 ---
 
@@ -31,8 +31,8 @@ export ANTHROPIC_API_KEY=sk-ant-...
 python -m gateway.main
 
 # 6. Find your operator token (auto-generated on first run)
-cat ~/.pork-gateway/identity/device-auth.json
-# Copy the 'operator' token — you'll need it for P-Ork's config
+cat ~/.vectorstep-gateway/identity/device-auth.json
+# Copy the 'operator' token — you'll need it for VectorStep's config
 ```
 
 Both `config.yaml` and `agents/` are gitignored — they contain personal credentials and environment-specific agent definitions. Use `samples/config.yaml.example` as your starting point.
@@ -42,7 +42,7 @@ Both `config.yaml` and `agents/` are gitignored — they contain personal creden
 ## Directory Structure
 
 ```
-P-Ork-Gateway/
+VectorStep-Gateway/
 ├── samples/
 │   └── config.yaml.example           # Config template with all options documented
 ├── agents/                           # Your agent definitions (gitignored)
@@ -94,9 +94,9 @@ Copy `samples/config.yaml.example` to `config.yaml` and edit. Values support `${
 
 | Field | Default | Description |
 |---|---|---|
-| `path` | `~/.pork-gateway/identity` | Where identity files are stored. Auto-generated on first run. |
+| `path` | `~/.vectorstep-gateway/identity` | Where identity files are stored. Auto-generated on first run. |
 
-The operator token (used by P-Ork to authenticate) is written to `<path>/device-auth.json` on first run.
+The operator token (used by VectorStep to authenticate) is written to `<path>/device-auth.json` on first run.
 
 ### `limits`
 
@@ -190,7 +190,7 @@ Most providers support `api_key` and `base_url`. Azure uses different fields:
 | Field | Default | Description |
 |---|---|---|
 | `level` | `INFO` | Log level: `DEBUG`, `INFO`, `WARNING`, or `ERROR` |
-| `dir` | `""` (disabled) | Directory for rotating log files. Omit to log to stdout only. When set, creates `gateway.log` (all application logs, 10 MB x 5 rotating) and `access.log` (uvicorn HTTP access logs, kept separate so request noise doesn't pollute `gateway.log` or stdout) — same format and rotation policy as P-Ork's `service.log`/`access.log` split, so both services' logs can be correlated directly. |
+| `dir` | `""` (disabled) | Directory for rotating log files. Omit to log to stdout only. When set, creates `gateway.log` (all application logs, 10 MB x 5 rotating) and `access.log` (uvicorn HTTP access logs, kept separate so request noise doesn't pollute `gateway.log` or stdout) — same format and rotation policy as VectorStep's `service.log`/`access.log` split, so both services' logs can be correlated directly. |
 
 ### `observability`
 
@@ -202,7 +202,7 @@ observability:
     enabled: true
     exporter: otlp                                        # otlp | console
     endpoint: https://otlp-gateway-prod-eu-west-0.grafana.net/otlp/v1/traces
-    service_name: pork-gateway
+    service_name: vectorstep-gateway
 ```
 
 | Field | Default | Description |
@@ -210,17 +210,17 @@ observability:
 | `enabled` | `false` | Enable OTel tracing |
 | `exporter` | `otlp` | `otlp` sends to an OTLP HTTP endpoint; `console` prints spans to stdout |
 | `endpoint` | `http://localhost:4318/v1/traces` | OTLP HTTP endpoint. For Grafana Cloud, use your region's OTLP gateway URL with a Basic Auth header set via `OTEL_EXPORTER_OTLP_HEADERS`. |
-| `service_name` | `pork-gateway` | `service.name` resource attribute on all spans |
+| `service_name` | `vectorstep-gateway` | `service.name` resource attribute on all spans |
 
 When OTel is enabled, the gateway emits three span types per agent run:
 
 | Span | Parent | Key attributes |
 |---|---|---|
-| `agent.run` | P-Ork `gen_ai.gateway` span (via W3C `traceparent`) | `agent.name`, `gen_ai.request.model`, `pork.gateway.iterations`, `pork.gateway.tool_calls`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` |
+| `agent.run` | VectorStep `gen_ai.gateway` span (via W3C `traceparent`) | `agent.name`, `gen_ai.request.model`, `vectorstep.gateway.iterations`, `vectorstep.gateway.tool_calls`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` |
 | `llm_call` | `agent.run` | `llm_call.iteration`, `llm_call.attempt`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `llm_call.error`/`llm_call.retryable` (failed attempts only) |
 | `tool_call <name>` | `agent.run` | `tool.name`, `tool.is_error` |
 
-P-Ork injects a W3C `traceparent` header into the agent WebSocket request params, and the gateway extracts it to make `agent.run` a child of P-Ork's pipeline span — giving you a single unified trace across both services in Grafana Tempo.
+VectorStep injects a W3C `traceparent` header into the agent WebSocket request params, and the gateway extracts it to make `agent.run` a child of VectorStep's pipeline span — giving you a single unified trace across both services in Grafana Tempo.
 
 **Grafana Cloud setup:**
 
@@ -285,7 +285,7 @@ tools:                    # MCP server names from mcp_servers config
 | Field | Required | Description |
 |---|---|---|
 | `name` | Yes | Agent identifier. Must match the directory name. Referenced as `agentId` in requests. |
-| `model` | Yes | Default model string. Can be overridden per-request via `executor_config.model` in P-Ork. |
+| `model` | Yes | Default model string. Can be overridden per-request via `executor_config.model` in VectorStep. |
 | `model_fallbacks` | No | List of model strings to try, in order, if `model` exhausts its retries (see `limits.llm_retry_attempts`). Once a fallback succeeds, later iterations in the same run try it first. |
 | `max_tokens` | Yes | Max output tokens per LLM call. |
 | `tools` | No | MCP server names, optionally scoped to specific tools (see below). Omit or leave empty for no tool access. |
@@ -332,7 +332,7 @@ Good soul files are:
 Editing `agent.yaml` or `soul.md` changes the agent's `version` (a content hash over the
 agent's entire config, exposed as `agentMeta.agentVersion` and on the `GET /agents` /
 `GET /agents/{name}` endpoints) and therefore resets that agent's calibration history in
-P-Ork — see P-Ork's `CONFIDENCE-EXPLAINED.md`.
+VectorStep — see VectorStep's `CONFIDENCE-EXPLAINED.md`.
 
 ### Startup Config Validation
 
@@ -390,7 +390,7 @@ The gateway sends **multiple frames** with the same request `id`: one accepted f
     "model": "anthropic/claude-opus-4-8",    // optional — overrides agent.yaml default
     "thinkingLevel": "medium",               // optional — Anthropic models only
     "traceToolResultMax": 8000,               // optional — overrides limits.trace_tool_result_max_chars for this request only
-    "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"  // injected by P-Ork
+    "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"  // injected by VectorStep
   }
 }
 
@@ -436,7 +436,7 @@ On error, the final frame is: `{"type": "res", "id": "uuid-2", "ok": false, "err
 
 `agentMeta.provider` is the provider key (`anthropic`, `openrouter`, `azure`, etc.) that actually served the request — if `model_fallbacks` kicked in and a later candidate from a *different* provider ended up serving it, `provider` reflects that final candidate, not the originally requested model. This is deliberately distinct from `agentMeta.model`, which is whatever the underlying LLM API itself reports as the model name — for most OpenAI-compat providers that's the raw vendor model id (e.g. OpenRouter reports `"deepseek/deepseek-v4-pro-..."`, not `"openrouter/deepseek/..."`), so `model` alone can't be used to reliably reconstruct which provider served a call.
 
-`agentMeta.agentVersion` is a content hash of the agent's full config, including `soul.md` (see [Creating Agents](#creating-agents)) — it changes whenever `agent.yaml` or `soul.md` changes. P-Ork uses it to scope calibration buckets, so two runs under different `agentVersion`s are never pooled as evidence for the same track record.
+`agentMeta.agentVersion` is a content hash of the agent's full config, including `soul.md` (see [Creating Agents](#creating-agents)) — it changes whenever `agent.yaml` or `soul.md` changes. VectorStep uses it to scope calibration buckets, so two runs under different `agentVersion`s are never pooled as evidence for the same track record.
 
 ### Trace Event Types
 
@@ -459,11 +459,11 @@ agent:sre-triage:pipeline:run-123:triage    ✅
 pipeline:run-123:triage                     ❌ (missing agent prefix)
 ```
 
-The P-Ork `gateway` executor generates a valid session key automatically if `session_key` is omitted from `executor_config`.
+The VectorStep `gateway` executor generates a valid session key automatically if `session_key` is omitted from `executor_config`.
 
-**What session keys do and don't do:** the gateway tracks session keys in memory (used for the `pork_gateway_sessions_active` metric) but does **not** persist message history between requests. Every agent call starts with a fresh message list containing only the current prompt. Session keys in this gateway provide namespace isolation and prefix validation — not conversational continuity across calls.
+**What session keys do and don't do:** the gateway tracks session keys in memory (used for the `vectorstep_gateway_sessions_active` metric) but does **not** persist message history between requests. Every agent call starts with a fresh message list containing only the current prompt. Session keys in this gateway provide namespace isolation and prefix validation — not conversational continuity across calls.
 
-This is intentional for P-Ork's usage pattern: session keys are scoped per pipeline run and step (e.g. `agent:sre-triage:pipeline:{{pipeline_run_id}}:triage`), so no two invocations of the same step share a key. Context passing between steps is handled explicitly by P-Ork via `next_step_context`, prompt templates, and `{{loop.prior_output}}` — the pipeline author controls exactly what each step sees, rather than the agent accumulating unbounded conversation history.
+This is intentional for VectorStep's usage pattern: session keys are scoped per pipeline run and step (e.g. `agent:sre-triage:pipeline:{{pipeline_run_id}}:triage`), so no two invocations of the same step share a key. Context passing between steps is handled explicitly by VectorStep via `next_step_context`, prompt templates, and `{{loop.prior_output}}` — the pipeline author controls exactly what each step sees, rather than the agent accumulating unbounded conversation history.
 
 ### Concurrency and Cancellation
 
@@ -475,7 +475,7 @@ up and the run actually starts.
 If the client disconnects (the WebSocket closes) while a run is in flight — whether still queued
 or already executing — the gateway cancels it immediately rather than letting the agentic loop run
 to completion for a response nobody will receive. Cancelled runs are recorded with
-`status="aborted"` in the `pork_gateway_agent_runs_total` metric.
+`status="aborted"` in the `vectorstep_gateway_agent_runs_total` metric.
 
 ---
 
@@ -541,7 +541,7 @@ Success response (200):
 }
 ```
 
-`agents/` is gitignored (personal to the deployment, unlike P-Ork's git-controlled `pipelines/`), so `committed` is always `false` — there is nothing to commit.
+`agents/` is gitignored (personal to the deployment, unlike VectorStep's git-controlled `pipelines/`), so `committed` is always `false` — there is nothing to commit.
 
 `PUT /agents/{name}` accepts `agent_yaml` and/or `soul_md` — omit one to leave that file untouched. The YAML's own `name:` field must always match the `name` used to create it (in the POST body) or the URL `{name}` (for PUT) — a rename is a delete + create, not an update.
 
@@ -581,7 +581,7 @@ The gateway exposes Prometheus-format metrics at `/metrics` (GET). No authentica
 
 ```yaml
 scrape_configs:
-  - job_name: pork-gateway
+  - job_name: vectorstep-gateway
     static_configs:
       - targets: ["localhost:18780"]
 ```
@@ -590,39 +590,39 @@ scrape_configs:
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
-| `pork_gateway_agent_runs_total` | Counter | `agent`, `model`, `status` | Total agent runs by agent, model, and terminal status (`ok`/`error`/`timeout`/`max_iterations`/`aborted`) |
-| `pork_gateway_agent_runs_in_progress` | Gauge | — | Currently executing agent runs |
-| `pork_gateway_agent_run_duration_seconds` | Histogram | `agent` | Agent run wall-clock duration in seconds |
-| `pork_gateway_agent_iterations` | Histogram | `agent` | Number of LLM iterations per agent run |
-| `pork_gateway_agent_tool_calls_total` | Counter | `agent` | Total tool calls made during agent runs |
-| `pork_gateway_llm_tokens_total` | Counter | `agent`, `model`, `direction` | Total LLM tokens consumed (`direction`: `input`/`output`) |
-| `pork_gateway_tool_calls_total` | Counter | `mcp_server`, `tool`, `result` | Total MCP tool calls by server, tool, and result (`success`/`error`/`timeout`) |
-| `pork_gateway_tool_call_duration_seconds` | Histogram | `mcp_server` | MCP tool call duration in seconds |
-| `pork_gateway_mcp_servers_running` | Gauge | `mcp_server` | 1 if MCP server is running, 0 otherwise |
-| `pork_gateway_mcp_restarts_total` | Counter | `mcp_server` | Total MCP server restarts |
-| `pork_gateway_sessions_active` | Gauge | — | Number of active sessions |
-| `pork_gateway_info` | Info | `version` | Build information |
+| `vectorstep_gateway_agent_runs_total` | Counter | `agent`, `model`, `status` | Total agent runs by agent, model, and terminal status (`ok`/`error`/`timeout`/`max_iterations`/`aborted`) |
+| `vectorstep_gateway_agent_runs_in_progress` | Gauge | — | Currently executing agent runs |
+| `vectorstep_gateway_agent_run_duration_seconds` | Histogram | `agent` | Agent run wall-clock duration in seconds |
+| `vectorstep_gateway_agent_iterations` | Histogram | `agent` | Number of LLM iterations per agent run |
+| `vectorstep_gateway_agent_tool_calls_total` | Counter | `agent` | Total tool calls made during agent runs |
+| `vectorstep_gateway_llm_tokens_total` | Counter | `agent`, `model`, `direction` | Total LLM tokens consumed (`direction`: `input`/`output`) |
+| `vectorstep_gateway_tool_calls_total` | Counter | `mcp_server`, `tool`, `result` | Total MCP tool calls by server, tool, and result (`success`/`error`/`timeout`) |
+| `vectorstep_gateway_tool_call_duration_seconds` | Histogram | `mcp_server` | MCP tool call duration in seconds |
+| `vectorstep_gateway_mcp_servers_running` | Gauge | `mcp_server` | 1 if MCP server is running, 0 otherwise |
+| `vectorstep_gateway_mcp_restarts_total` | Counter | `mcp_server` | Total MCP server restarts |
+| `vectorstep_gateway_sessions_active` | Gauge | — | Number of active sessions |
+| `vectorstep_gateway_info` | Info | `version` | Build information |
 
 ### Example PromQL queries
 
 ```promql
 # Agent run success rate (last 5 minutes)
-rate(pork_gateway_agent_runs_total{status="ok"}[5m])
-  / rate(pork_gateway_agent_runs_total[5m])
+rate(vectorstep_gateway_agent_runs_total{status="ok"}[5m])
+  / rate(vectorstep_gateway_agent_runs_total[5m])
 
 # Average agent run duration by agent
-rate(pork_gateway_agent_run_duration_seconds_sum[5m])
-  / rate(pork_gateway_agent_run_duration_seconds_count[5m])
+rate(vectorstep_gateway_agent_run_duration_seconds_sum[5m])
+  / rate(vectorstep_gateway_agent_run_duration_seconds_count[5m])
 
 # MCP tool error rate by server
-rate(pork_gateway_tool_calls_total{result="error"}[5m])
-  / rate(pork_gateway_tool_calls_total[5m])
+rate(vectorstep_gateway_tool_calls_total{result="error"}[5m])
+  / rate(vectorstep_gateway_tool_calls_total[5m])
 
 # Currently running agents
-pork_gateway_agent_runs_in_progress
+vectorstep_gateway_agent_runs_in_progress
 
 # Active sessions
-pork_gateway_sessions_active
+vectorstep_gateway_sessions_active
 ```
 
 ---
@@ -642,23 +642,23 @@ pork_gateway_sessions_active
 | `GRAFANA_URL` | `mcp_servers.grafana` | Grafana instance URL |
 | `GRAFANA_TOKEN` | `mcp_servers.grafana` | Grafana service account token |
 | `TAVILY_API_KEY` | `mcp_servers.tavily` | Tavily web search API key |
-| `PORK_GATEWAY_CONFIG` | Gateway startup | Override config file path (default: `config.yaml`) |
+| `VECTORSTEP_GATEWAY_CONFIG` | Gateway startup | Override config file path (default: `config.yaml`) |
 | `OTEL_EXPORTER_OTLP_HEADERS` | OTel exporter | Auth headers for OTLP endpoint (e.g. Grafana Cloud Basic Auth) |
 
 ---
 
-## P-Ork Integration
+## VectorStep Integration
 
-### 1. Configure P-Ork
+### 1. Configure VectorStep
 
-In P-Ork's `config.yaml`:
+In VectorStep's `config.yaml`:
 
 ```yaml
 executors:
   gateway:
     url: ws://localhost:18780/ws        # gateway WebSocket endpoint
-    token: ${PORK_GATEWAY_TOKEN}        # operator token from device-auth.json
-    rest_url: http://localhost:18780    # used by the P-Ork Agents UI
+    token: ${VECTORSTEP_GATEWAY_TOKEN}        # operator token from device-auth.json
+    rest_url: http://localhost:18780    # used by the VectorStep Agents UI
 ```
 
 ### 2. Use in pipeline YAML
@@ -681,7 +681,7 @@ steps:
       Investigate and return JSON...
 ```
 
-Steps within the same P-Ork pipeline can freely mix `executor: openclaw` and `executor: gateway`.
+Steps within the same VectorStep pipeline can freely mix `executor: openclaw` and `executor: gateway`.
 
 ### Differences from the OpenClaw executor
 
@@ -692,17 +692,17 @@ Steps within the same P-Ork pipeline can freely mix `executor: openclaw` and `ex
 | Model routing | OpenClaw agent config | Gateway `providers:` config |
 | MCP tools | OpenClaw MCP servers | Gateway `mcp_servers:` config |
 | Thinking parameter | `thinking` | `thinkingLevel` |
-| OTel trace propagation | Not supported | Supported — joins P-Ork's trace |
+| OTel trace propagation | Not supported | Supported — joins VectorStep's trace |
 
 ---
 
 ## Gateway MCP (agent authoring)
 
-[`P-Ork-Gateway-MCP`](../P-Ork-Gateway-MCP) is a separate, standalone MCP server (own repo, own process) that exposes this gateway's agent-management and introspection surface — `list_agents`/`get_agent`/`list_mcp_servers`/`list_mcp_tools`/`list_providers`/`get_metrics`/`validate_agent` for reads, `create_agent`/`update_agent`/`delete_agent`/`reload` for writes — to an MCP client (Claude Code/Desktop), so an agent's `agent.yaml`/`soul.md` can be authored conversationally instead of by hand-editing files on the host running the gateway.
+[`VectorStep-Gateway-MCP`](../VectorStep-Gateway-MCP) is a separate, standalone MCP server (own repo, own process) that exposes this gateway's agent-management and introspection surface — `list_agents`/`get_agent`/`list_mcp_servers`/`list_mcp_tools`/`list_providers`/`get_metrics`/`validate_agent` for reads, `create_agent`/`update_agent`/`delete_agent`/`reload` for writes — to an MCP client (Claude Code/Desktop), so an agent's `agent.yaml`/`soul.md` can be authored conversationally instead of by hand-editing files on the host running the gateway.
 
 It talks to this gateway only over the REST endpoints above (the `/agents`/`/providers` family) — no shared code, no imports of `gateway.*`. It holds the **operator token** (`GATEWAY_OPERATOR_TOKEN`, the value in `<identity>/device-auth.json`) and never returns it, a provider API key, or any other `config.yaml` secret from any tool. See that repo's README for setup.
 
-This is the agent-authoring counterpart to [P-Ork's own MCP server](../P-Ork-Service-MCP), which handles pipelines/steps — the two have non-overlapping tool sets (agents live here; pipelines live in P-Ork).
+This is the agent-authoring counterpart to [VectorStep's own MCP server](../VectorStep-Service-MCP), which handles pipelines/steps — the two have non-overlapping tool sets (agents live here; pipelines live in VectorStep).
 
 ---
 

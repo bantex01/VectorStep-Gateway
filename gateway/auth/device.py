@@ -8,7 +8,7 @@ from gateway.models.config import IdentityConfig
 
 def _identity_dir(config: IdentityConfig) -> Path:
     """Return resolved identity directory, allowing env var override."""
-    env_override = os.environ.get("PORK_GATEWAY_IDENTITY_DIR")
+    env_override = os.environ.get("VECTORSTEP_GATEWAY_IDENTITY_DIR")
     raw = env_override if env_override else config.path
     return Path(raw).expanduser().resolve()
 
@@ -41,15 +41,15 @@ def bootstrap_identity(config: IdentityConfig) -> dict:
         device_json.write_text(json.dumps(device_data, indent=2))
         auth_json.write_text(json.dumps(auth_data, indent=2))
 
-        print(f"[pork-gateway] First run — generated device identity.")
-        print(f"[pork-gateway] Written to: {device_json}")
-        print(f"[pork-gateway] Written to: {auth_json}")
-        print(f"[pork-gateway] Add the following to your P-Ork config.yaml:")
-        print(f"[pork-gateway]   executors:")
-        print(f"[pork-gateway]     pork_gateway:")
-        print(f"[pork-gateway]       url: ws://localhost:18789/rpc")
-        print(f"[pork-gateway]       identity_dir: {identity_dir}")
-        print(f"[pork-gateway] Then use executor: pork_gateway in your pipeline YAML steps.")
+        print(f"[vectorstep-gateway] First run — generated device identity.")
+        print(f"[vectorstep-gateway] Written to: {device_json}")
+        print(f"[vectorstep-gateway] Written to: {auth_json}")
+        print(f"[vectorstep-gateway] Add the following to your VectorStep config.yaml:")
+        print(f"[vectorstep-gateway]   executors:")
+        print(f"[vectorstep-gateway]     vectorstep_gateway:")
+        print(f"[vectorstep-gateway]       url: ws://localhost:18789/rpc")
+        print(f"[vectorstep-gateway]       identity_dir: {identity_dir}")
+        print(f"[vectorstep-gateway] Then use executor: vectorstep_gateway in your pipeline YAML steps.")
 
         return auth_data
 

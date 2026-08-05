@@ -1,4 +1,4 @@
-"""Shared fixtures for P-Ork Gateway integration tests."""
+"""Shared fixtures for VectorStep Gateway integration tests."""
 import json
 from pathlib import Path
 
@@ -43,7 +43,7 @@ def gateway_session(tmp_path_factory):
     config_file.write_text(yaml.dump(config_data))
 
     import os
-    os.environ["PORK_GATEWAY_CONFIG"] = str(config_file)
+    os.environ["VECTORSTEP_GATEWAY_CONFIG"] = str(config_file)
 
     from gateway.main import app
     with TestClient(app) as client:

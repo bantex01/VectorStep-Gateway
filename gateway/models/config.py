@@ -29,7 +29,7 @@ class ServerConfig(BaseModel):
 
 
 class IdentityConfig(BaseModel):
-    path: str = "~/.pork-gateway/identity"
+    path: str = "~/.vectorstep-gateway/identity"
 
 
 class MCPServerConfig(BaseModel):
@@ -65,7 +65,7 @@ class LoggingConfig(BaseModel):
     level: str = "INFO"
     # Empty/omitted disables file logging (stdout only) — see gateway.main._setup_logging.
     # When set, creates gateway.log and access.log (rotating, 10 MB x 5), mirroring
-    # P-Ork's service.log/access.log split.
+    # VectorStep's service.log/access.log split.
     dir: str = ""
 
 
@@ -73,7 +73,7 @@ class OtelConfig(BaseModel):
     enabled: bool = False
     exporter: str = "otlp"        # otlp | console
     endpoint: str = "http://localhost:4318/v1/traces"
-    service_name: str = "pork-gateway"
+    service_name: str = "vectorstep-gateway"
 
 
 class ObservabilityConfig(BaseModel):

@@ -173,11 +173,11 @@ class TestMetricsEndpoint:
     def test_prometheus_format(self, gateway_session):
         client, _, _ = gateway_session
         response = client.get("/metrics")
-        assert b"pork_gateway" in response.content
+        assert b"vectorstep_gateway" in response.content
         assert response.headers["content-type"].startswith("text/plain")
 
     def test_contains_expected_metric_names(self, gateway_session):
         client, _, _ = gateway_session
         text = client.get("/metrics").content.decode()
-        assert "pork_gateway_agent_runs_total" in text
-        assert "pork_gateway_sessions_active" in text
+        assert "vectorstep_gateway_agent_runs_total" in text
+        assert "vectorstep_gateway_sessions_active" in text

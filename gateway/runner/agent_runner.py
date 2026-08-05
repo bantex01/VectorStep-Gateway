@@ -233,7 +233,7 @@ class AgentRunner:
                 context=parent_ctx,
                 attributes={
                     "agent.name": agent.name,
-                    "pork.session_key": session_key,
+                    "vectorstep.session_key": session_key,
                     "gen_ai.request.model": model_string,
                 },
             ) as agent_span:
@@ -273,8 +273,8 @@ class AgentRunner:
                         agent_span.set_attribute("gen_ai.response.model", model_used)
                         agent_span.set_attribute("gen_ai.usage.input_tokens", total_input_tokens)
                         agent_span.set_attribute("gen_ai.usage.output_tokens", total_output_tokens)
-                        agent_span.set_attribute("pork.gateway.iterations", iterations)
-                        agent_span.set_attribute("pork.gateway.tool_calls", tool_calls_made)
+                        agent_span.set_attribute("vectorstep.gateway.iterations", iterations)
+                        agent_span.set_attribute("vectorstep.gateway.tool_calls", tool_calls_made)
                         run_status = "ok"
                         return AgentRunResult(
                             text=text,
