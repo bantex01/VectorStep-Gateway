@@ -1,5 +1,5 @@
 """Tests for gateway/agent_writer.py — the atomic validated-write path for
-agent.yaml/soul.md pairs (mirrors P-Ork's config_writer.py test coverage)."""
+agent.yaml/soul.md pairs (mirrors VectorStep's config_writer.py test coverage)."""
 import yaml
 
 from gateway.agent_writer import delete_agent, validate_agent, write_agent

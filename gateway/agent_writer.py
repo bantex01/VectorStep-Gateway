@@ -4,7 +4,7 @@ writes to agents/ for the create/update/delete JSON endpoints — a single
 tested write path shared by any future caller (the gateway MCP, or a future
 UI editor).
 
-Mirrors P-Ork's service/src/config_writer.py: every write validates a
+Mirrors VectorStep's service/src/config_writer.py: every write validates a
 *candidate* view of agents/ — the real directories, plus the one
 new/changed/removed entry — fully in memory via
 gateway.agents.loader.load_agents_from_raw()/validate_agent_models(), before
@@ -102,7 +102,7 @@ def write_agent(
     `name` is authoritative for the target directory (the URL {name} for a
     PUT, or the body's `name` field for a POST) and must match agent_yaml's
     own `name:` field — a rename is a delete + create, not an update, same
-    rationale as P-Ork's pipeline PUT.
+    rationale as VectorStep's pipeline PUT.
     """
     parsed, err = _parse_named_yaml(agent_yaml_text, name)
     if err:

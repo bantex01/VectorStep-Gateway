@@ -84,7 +84,7 @@ class TestAgentConfig:
 
 
 class TestComputeVersion:
-    """See SPEC-prompt-versioning.md §3a — compute_version is the substrate P-Ork
+    """See SPEC-prompt-versioning.md §3a — compute_version is the substrate VectorStep
     uses to scope calibration buckets to an agent's actual behavioural definition."""
 
     def _agent(self, **overrides):
@@ -122,7 +122,7 @@ class TestComputeVersion:
 
     def test_soul_whitespace_only_change_same_version(self):
         # normalise_text strips trailing whitespace / leading+trailing blank lines,
-        # same conservative rule as P-Ork's prompt hashing (SPEC-prompt-versioning.md §2)
+        # same conservative rule as VectorStep's prompt hashing (SPEC-prompt-versioning.md §2)
         v1 = self._agent(soul="You are a test agent.").compute_version()
         v2 = self._agent(soul="You are a test agent.  \n\n").compute_version()
         assert v1 == v2

@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 
 def normalise_text(text: str) -> str:
-    """Conservative normalisation shared with P-Ork's prompt hashing — strip
+    """Conservative normalisation shared with VectorStep's prompt hashing — strip
     trailing whitespace per line, strip leading/trailing blank lines, nothing
     more. See SPEC-prompt-versioning.md §2."""
     return "\n".join(line.rstrip() for line in text.splitlines()).strip("\n")
@@ -42,7 +42,7 @@ class AgentConfig(BaseModel):
 
         DELIBERATELY over-inclusive: hashes every field on this model, not a
         curated subset. Adding ANY new field to AgentConfig therefore resets
-        every agent's calibration bucket in P-Ork (SPEC-prompt-versioning.md
+        every agent's calibration bucket in VectorStep (SPEC-prompt-versioning.md
         §2). That is the safe failure direction — over-invalidation costs
         labels, under-invalidation corrupts an enforcing gate — but be aware
         of it when adding fields, and prefer to batch such changes.
