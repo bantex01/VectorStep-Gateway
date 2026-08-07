@@ -79,6 +79,12 @@ providers:
   #   # the underlying model family. For reasoning-family deployments (gpt-5, o1, o3),
   #   # set the agent's max_tokens generously (2000+) — see README §Azure OpenAI.
 
+  # openai:                               # OpenAI's own API — model prefix: openai/<model>
+  #   api_key: ${OPENAI_API_KEY}
+  #   base_url: https://api.openai.com/v1  # optional — this is the default
+  #   # For reasoning-family models (gpt-5, o1, o3), set the agent's max_tokens
+  #   # generously (2000+) — see README §Providers.
+
   # yolo:                                # any custom OpenAI-compatible endpoint — model prefix: yolo/<model>
   #   api_key: ${YOLO_API_KEY}
   #   base_url: https://your-provider.example.com/v1

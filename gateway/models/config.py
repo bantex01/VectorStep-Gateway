@@ -58,6 +58,7 @@ class ProvidersConfig(BaseModel):
     ollama_cloud: ProviderConfig = Field(default_factory=ProviderConfig, alias="ollama-cloud")
     google: ProviderConfig = Field(default_factory=ProviderConfig)
     azure: AzureConfig = Field(default_factory=AzureConfig)
+    openai: ProviderConfig = Field(default_factory=ProviderConfig)
     yolo: ProviderConfig = Field(default_factory=ProviderConfig)
 
 

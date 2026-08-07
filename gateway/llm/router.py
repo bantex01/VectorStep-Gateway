@@ -7,6 +7,7 @@ from gateway.llm.providers.azure import AzureOpenAIProvider
 from gateway.llm.providers.base import BaseProvider
 from gateway.llm.providers.google import GoogleProvider
 from gateway.llm.providers.ollama import OllamaCloudProvider, OllamaProvider
+from gateway.llm.providers.openai import OpenAIProvider
 from gateway.llm.providers.openrouter import OpenRouterProvider
 from gateway.llm.providers.yolo import YoloProvider
 from gateway.models.config import GatewayConfig
@@ -25,6 +26,7 @@ PREFIX_TO_PROVIDER: dict[str, str] = {
     "ollama-cloud/": "ollama_cloud",
     "google/": "google",
     "azure/": "azure",
+    "openai/": "openai",
     "yolo/": "yolo",
 }
 
@@ -64,6 +66,7 @@ class LLMRouter:
           google/<model>      → GoogleProvider,        model = everything after prefix
           ollama/<model>      → OllamaProvider,        model = everything after prefix
           ollama-cloud/<model>→ OllamaCloudProvider,   model = everything after prefix
+          openai/<model>      → OpenAIProvider,        model = everything after prefix
           yolo/<model>        → YoloProvider,          model = everything after prefix
           <bare>              → AnthropicProvider,     model = <bare>
         """
@@ -79,6 +82,8 @@ class LLMRouter:
             return self._ollama_cloud(), model_string[len("ollama-cloud/"):]
         if model_string.startswith("google/"):
             return self._google(), model_string[len("google/"):]
+        if model_string.startswith("openai/"):
+            return self._openai(), model_string[len("openai/"):]
         if model_string.startswith("yolo/"):
             return self._yolo(), model_string[len("yolo/"):]
         return self._anthropic(), model_string
@@ -142,6 +147,16 @@ class LLMRouter:
                 timeout=float(self._config.limits.request_timeout_seconds),
             )
         return self._providers["azure"]  # type: ignore[return-value]
+
+    def _openai(self) -> OpenAIProvider:
+        if "openai" not in self._providers:
+            cfg = self._config.providers.openai
+            self._providers["openai"] = OpenAIProvider(
+                base_url=cfg.base_url or "https://api.openai.com/v1",
+                api_key=cfg.api_key,
+                timeout=float(self._config.limits.request_timeout_seconds),
+            )
+        return self._providers["openai"]  # type: ignore[return-value]
 
     def _yolo(self) -> YoloProvider:
         if "yolo" not in self._providers:

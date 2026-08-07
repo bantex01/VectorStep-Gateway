@@ -29,6 +29,7 @@ def provider_configured_map(config: GatewayConfig) -> dict[str, bool]:
         "ollama_cloud": bool(providers.ollama_cloud.api_key),
         "google": bool(providers.google.api_key),
         "azure": bool(providers.azure.api_key and providers.azure.resource_name),
+        "openai": bool(providers.openai.api_key),
         "yolo": bool(providers.yolo.api_key),
     }
 

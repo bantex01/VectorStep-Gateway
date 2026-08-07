@@ -5,8 +5,9 @@ from gateway.llm.providers.anthropic import AnthropicProvider
 from gateway.llm.providers.azure import AzureOpenAIProvider
 from gateway.llm.providers.google import GoogleProvider
 from gateway.llm.providers.ollama import OllamaCloudProvider, OllamaProvider
+from gateway.llm.providers.openai import OpenAIProvider
 from gateway.llm.providers.openrouter import OpenRouterProvider
-from gateway.llm.router import LLMRouter
+from gateway.llm.router import LLMRouter, provider_key_for_model_string
 from gateway.models.config import (
     AzureConfig,
     GatewayConfig,
@@ -88,6 +89,12 @@ class TestRouting:
         assert isinstance(provider, AzureOpenAIProvider)
         assert model == "gpt-4o-mini"
 
+    def test_openai_prefix(self):
+        router = LLMRouter(_config(openai="key"))
+        provider, model = router.get_provider_and_model("openai/gpt-5")
+        assert isinstance(provider, OpenAIProvider)
+        assert model == "gpt-5"
+
     def test_bare_name_defaults_to_anthropic(self):
         router = LLMRouter(_config(anthropic="key"))
         provider, model = router.get_provider_and_model("claude-sonnet-4-6")
@@ -121,3 +128,26 @@ class TestProviderCaching:
         assert p_anthropic is not p_openrouter
         assert isinstance(p_anthropic, AnthropicProvider)
         assert isinstance(p_openrouter, OpenRouterProvider)
+
+    def test_fallback_chain_crosses_into_and_out_of_openai(self):
+        # Simulates model_fallbacks resolution: anthropic/... -> openai/... -> anthropic/...
+        router = LLMRouter(_config(anthropic="key", openai="key2"))
+        chain = ["anthropic/claude-sonnet-4-6", "openai/gpt-5", "anthropic/claude-haiku-4-5"]
+        providers = [router.get_provider_and_model(m)[0] for m in chain]
+        assert isinstance(providers[0], AnthropicProvider)
+        assert isinstance(providers[1], OpenAIProvider)
+        assert isinstance(providers[2], AnthropicProvider)
+        # Same-type steps still share the cached instance.
+        assert providers[0] is providers[2]
+        assert providers[0] is not providers[1]
+
+
+class TestProviderKeyForModelString:
+    def test_openai_prefix(self):
+        assert provider_key_for_model_string("openai/gpt-5") == "openai"
+
+    def test_anthropic_prefix(self):
+        assert provider_key_for_model_string("anthropic/claude-sonnet-4-6") == "anthropic"
+
+    def test_bare_name_defaults_to_anthropic(self):
+        assert provider_key_for_model_string("claude-sonnet-4-6") == "anthropic"

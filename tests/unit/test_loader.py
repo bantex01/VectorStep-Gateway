@@ -24,7 +24,7 @@ from gateway.models.config import (
 
 
 def _make_config(anthropic_key="", openrouter_key="", ollama_cloud_key="", google_key="",
-                 azure_key="", azure_resource="", mcp_servers=None):
+                 azure_key="", azure_resource="", openai_key="", mcp_servers=None):
     return GatewayConfig(
         server=ServerConfig(),
         identity=IdentityConfig(),
@@ -34,6 +34,7 @@ def _make_config(anthropic_key="", openrouter_key="", ollama_cloud_key="", googl
             **{"ollama-cloud": ProviderConfig(api_key=ollama_cloud_key)},
             google=ProviderConfig(api_key=google_key),
             azure=AzureConfig(api_key=azure_key, resource_name=azure_resource),
+            openai=ProviderConfig(api_key=openai_key),
         ),
         mcp_servers=mcp_servers or {},
     )
@@ -120,6 +121,20 @@ class TestValidateAgentModels:
         with caplog.at_level(logging.WARNING, logger="gateway.agents.loader"):
             validate_agent_models(agents, config)
         assert "azure" in caplog.text.lower()
+
+    def test_configured_openai_no_warning(self, caplog):
+        config = _make_config(openai_key="sk-openai-test")
+        agents = {"agent": _make_agent("openai/gpt-5")}
+        with caplog.at_level(logging.WARNING, logger="gateway.agents.loader"):
+            validate_agent_models(agents, config)
+        assert caplog.text == ""
+
+    def test_unconfigured_openai_warns(self, caplog):
+        config = _make_config(openai_key="")
+        agents = {"agent": _make_agent("openai/gpt-5")}
+        with caplog.at_level(logging.WARNING, logger="gateway.agents.loader"):
+            validate_agent_models(agents, config)
+        assert "openai" in caplog.text.lower()
 
     def test_unrecognized_prefix_logs_error(self, caplog):
         config = _make_config(anthropic_key="key")
@@ -273,6 +288,10 @@ class TestProviderConfiguredMap:
         assert provider_configured_map(config)["azure"] is False
         config = _make_config(azure_key="key", azure_resource="my-resource")
         assert provider_configured_map(config)["azure"] is True
+
+    def test_openai_reflects_configured_key(self):
+        assert provider_configured_map(_make_config(openai_key=""))["openai"] is False
+        assert provider_configured_map(_make_config(openai_key="key"))["openai"] is True
 
 
 class TestValidateAgentModelsToolReferences:
