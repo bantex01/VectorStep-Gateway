@@ -72,6 +72,12 @@ _tool_call_duration = Histogram(
     buckets=_TOOL_DURATION_BUCKETS,
 )
 
+_tool_denials_total = Counter(
+    "vectorstep_gateway_tool_denials_total",
+    "Total tool calls blocked by tool_policy, by server, tool, and agent",
+    labelnames=["mcp_server", "tool", "agent"],
+)
+
 _mcp_servers_running = Gauge(
     "vectorstep_gateway_mcp_servers_running",
     "1 if MCP server is running, 0 otherwise",
@@ -132,6 +138,10 @@ def record_tool_call(
 ) -> None:
     _tool_calls_total.labels(mcp_server=mcp_server, tool=tool, result=result).inc()
     _tool_call_duration.labels(mcp_server=mcp_server).observe(duration_s)
+
+
+def record_tool_denial(mcp_server: str, tool: str, agent: str) -> None:
+    _tool_denials_total.labels(mcp_server=mcp_server, tool=tool, agent=agent).inc()
 
 
 def record_mcp_restart(mcp_server: str) -> None:

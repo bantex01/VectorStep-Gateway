@@ -232,6 +232,31 @@ VectorStep injects a W3C `traceparent` header into the agent WebSocket request p
 2. Set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(instanceId:apiKey)>` in your environment
 3. Enable `observability.otel.enabled: true` and set `endpoint` to your Grafana Cloud OTLP URL
 
+### `tool_policy`
+
+Optional operator-owned allow/deny policy evaluated on every tool call, independent of any
+agent's own `tools:` allowlist. Omit it entirely for the previous unconditional-execution
+behaviour. Loaded from `config.yaml` at startup only (no write API) — changing it needs a
+restart. Full schema, matching semantics, and default-deny tool-visibility behaviour are
+documented on the [website](https://vectorstep.io/docs/gateway/tool-policy/); inspect what's
+active at runtime via `GET /tool-policy`.
+
+```yaml
+tool_policy:
+  default: allow            # allow | deny — applies when no rule matches
+  rules:
+    - deny: {server: atlassian, tool: jira_delete_issue}
+      reason: "Destructive Jira operations are operator-only"
+    - allow: {server: grafana}
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `default` | `allow` | Fallback decision when no rule matches |
+| `rules` | `[]` | Ordered list of match rules — first match wins |
+| `rules[].allow` / `rules[].deny` | — | Exactly one per rule. Match block: `server`, `tool` (glob), `agent` (glob), `input_regex` (matched against the JSON-serialised input) |
+| `rules[].reason` | — | Required on `deny`, optional on `allow` — shown to the LLM and logged |
+
 ---
 
 ## Model Routing
@@ -453,6 +478,7 @@ On error, the final frame is: `{"type": "res", "id": "uuid-2", "ok": false, "err
 | `text` | `content` | Text output block from the LLM |
 | `tool_call` | `name`, `input` | Tool call about to be executed |
 | `tool_result` | `name`, `content`, `is_error` | Result returned from MCP tool. `content` is capped at `limits.trace_tool_result_max_chars` (default 3000, overridable per-request via `traceToolResultMax` — see `limits` above) — this is a trace-only truncation; the LLM's own conversation always sees the full result. |
+| `tool_denied` | `name`, `server`, `rule_index`, `reason` | A `tool_policy` rule blocked this call before it reached the MCP server — see [tool_policy](#tool_policy). No `tool_result` event follows it; the LLM receives an `is_error` tool result instead. |
 
 ### Session Keys
 
@@ -500,6 +526,7 @@ to completion for a response nobody will receive. Cancelled runs are recorded wi
 | `POST` | `/reload` | Reload all agent configs from disk |
 | `GET` | `/mcp/tools` | List all tools across all MCP servers |
 | `GET` | `/mcp/servers` | List MCP server status (pid, tool count) |
+| `GET` | `/tool-policy` | Read-only view of the active `tool_policy` rules (reasons included) — no write endpoint, see [tool_policy](#tool_policy) |
 | `GET` | `/metrics` | Prometheus metrics (no auth required) |
 
 ### `/health` response

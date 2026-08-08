@@ -164,6 +164,18 @@ class TestMcpEndpoints:
         assert data == {}
 
 
+class TestToolPolicyEndpoint:
+    def test_returns_200(self, gateway_session):
+        client, _, _ = gateway_session
+        response = client.get("/tool-policy")
+        assert response.status_code == 200
+
+    def test_default_shape_when_unconfigured(self, gateway_session):
+        client, _, _ = gateway_session
+        data = client.get("/tool-policy").json()
+        assert data == {"default": "allow", "rules": []}
+
+
 class TestMetricsEndpoint:
     def test_returns_200(self, gateway_session):
         client, _, _ = gateway_session

@@ -93,3 +93,18 @@ logging:
   level: INFO     # DEBUG | INFO | WARNING | ERROR
   dir: ./logs     # omit to disable file logging (stdout only)
                   # creates gateway.log and access.log (rotating, 10 MB x 5)
+
+# Operator-owned allow/deny policy, evaluated on every tool call independent of
+# any agent's own `tools:` allowlist. Omit entirely for unconditional execution
+# (previous behaviour). Loaded at startup only — changing this needs a restart.
+# See README §tool_policy for the full schema and semantics.
+# tool_policy:
+#   default: allow                # allow | deny — applies when no rule matches
+#   rules:
+#     - deny: {server: atlassian, tool: jira_delete_issue}
+#       reason: "Destructive Jira operations are operator-only"
+#     - deny: {tool: "execute_*", input_regex: "(?i)delete|drop"}
+#       reason: "Mutating queries blocked by policy"
+#     - allow: {server: grafana}   # useful under default: deny
+#     - deny: {agent: experimental-*}
+#       reason: "Experimental agents run toolless in this deployment"

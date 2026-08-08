@@ -1,9 +1,9 @@
 import os
 import re
-from typing import Optional
+from typing import Literal, Optional
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class LimitsConfig(BaseModel):
@@ -81,6 +81,60 @@ class ObservabilityConfig(BaseModel):
     otel: OtelConfig = OtelConfig()
 
 
+class ToolPolicyMatch(BaseModel):
+    """Match fields for a tool_policy rule — all present fields must match (AND).
+
+    `tool` and `agent` are fnmatch globs; `input_regex` is `re.search`-ed against
+    the JSON-serialised tool input. Unknown keys (e.g. a misspelled `sever:`)
+    are a validation error at startup — see extra="forbid" — rather than a
+    silently-inert rule.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    server: Optional[str] = None
+    tool: Optional[str] = None
+    agent: Optional[str] = None
+    input_regex: Optional[str] = None
+
+
+class ToolPolicyRule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    allow: Optional[ToolPolicyMatch] = None
+    deny: Optional[ToolPolicyMatch] = None
+    # Reserved for Phase 2 (see SPEC-gateway-tool-policy.md §7) — parses today so
+    # configs written now don't need editing when it lands, but is rejected below.
+    require_approval: Optional[ToolPolicyMatch] = None
+    reason: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _check_single_action_and_reason(self) -> "ToolPolicyRule":
+        actions = [
+            name for name, value in (
+                ("allow", self.allow), ("deny", self.deny),
+                ("require_approval", self.require_approval),
+            ) if value is not None
+        ]
+        if len(actions) != 1:
+            raise ValueError(
+                f"tool_policy rule must have exactly one of allow/deny/require_approval, "
+                f"got: {actions or 'none'}"
+            )
+        if self.require_approval is not None:
+            raise ValueError(
+                "tool_policy rule action 'require_approval' is not yet supported "
+                "(Phase 2 — see SPEC-gateway-tool-policy.md §7)"
+            )
+        if self.deny is not None and not self.reason:
+            raise ValueError("tool_policy 'deny' rules require a non-empty 'reason'")
+        return self
+
+
+class ToolPolicyConfig(BaseModel):
+    default: Literal["allow", "deny"] = "allow"
+    rules: list[ToolPolicyRule] = []
+
+
 class GatewayConfig(BaseModel):
     server: ServerConfig
     agents_dir: str = "./agents"
@@ -90,6 +144,7 @@ class GatewayConfig(BaseModel):
     providers: ProvidersConfig
     logging: LoggingConfig = LoggingConfig()
     observability: ObservabilityConfig = ObservabilityConfig()
+    tool_policy: Optional[ToolPolicyConfig] = None
 
 
 def _resolve_env_vars(obj):

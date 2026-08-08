@@ -18,9 +18,15 @@ from gateway.llm.tool_translator import (
     mcp_to_openrouter,
 )
 from gateway.mcp.manager import MCPManager, MCPToolResult
-from gateway.metrics import record_agent_run_complete, record_agent_run_start, record_tool_call
+from gateway.metrics import (
+    record_agent_run_complete,
+    record_agent_run_start,
+    record_tool_call,
+    record_tool_denial,
+)
 from gateway.models.agent import AgentConfig
 from gateway.models.config import LimitsConfig
+from gateway.policy import ToolPolicy
 from gateway.tracing import tracer
 
 logger = logging.getLogger(__name__)
@@ -71,6 +77,7 @@ class AgentRunner:
         thinking_level: str | None,
         mcp_manager: MCPManager,
         limits: LimitsConfig,
+        tool_policy: ToolPolicy | None = None,  # None → zero-cost passthrough, no policy configured
         on_trace_event=None,  # Optional async callable(event: dict) — called after each trace event
         remote_context: otel_context.Context | None = None,
         trace_tool_result_max: int | None = None,  # per-request override of limits.trace_tool_result_max_chars
@@ -91,6 +98,8 @@ class AgentRunner:
         # formats — which one is used depends on which candidate model ends
         # up serving the request.
         mcp_tools = mcp_manager.get_tools_for_agent(agent)
+        if tool_policy is not None:
+            mcp_tools = tool_policy.visible_tools(agent.name, mcp_tools)
         anthropic_tools = mcp_to_anthropic(mcp_tools) if mcp_tools else None
         openai_tools = mcp_to_openrouter(mcp_tools) if mcp_tools else None
 
@@ -338,6 +347,34 @@ class AgentRunner:
 
                         await _emit({"type": "tool_call", "name": tool_name, "input": arguments})
                         logger.debug("Agent %s — tool call: %s %s", agent.name, tool_name, arguments)
+
+                        if tool_policy is not None:
+                            server_name, _, unscoped_tool = tool_name.partition("__")
+                            decision = tool_policy.evaluate(agent.name, server_name, unscoped_tool, arguments)
+                            if not decision.allowed:
+                                await _emit({
+                                    "type": "tool_denied",
+                                    "name": tool_name,
+                                    "server": server_name,
+                                    "rule_index": decision.rule_index,
+                                    "reason": decision.reason,
+                                })
+                                logger.warning(
+                                    "Agent %s — tool call denied by policy: %s (rule #%s): %s",
+                                    agent.name, tool_name, decision.rule_index, decision.reason,
+                                )
+                                record_tool_denial(mcp_server=server_name, tool=unscoped_tool, agent=agent.name)
+                                denied_result = MCPToolResult(
+                                    content=[{
+                                        "type": "text",
+                                        "text": f"Blocked by gateway tool policy: {decision.reason}",
+                                    }],
+                                    is_error=True,
+                                )
+                                if is_openai_compat:
+                                    return mcp_result_to_openrouter(tool_use_id, denied_result)
+                                else:
+                                    return mcp_result_to_anthropic(tool_use_id, denied_result)
 
                         tool_start = time.monotonic()
                         tool_result_str = "success"

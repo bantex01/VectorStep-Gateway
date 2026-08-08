@@ -20,6 +20,7 @@ from gateway.llm.router import PREFIX_TO_PROVIDER, LLMRouter
 from gateway.mcp.manager import MCPManager
 from gateway.models.agent import AgentConfig
 from gateway.models.config import GatewayConfig, load_config
+from gateway.policy import ToolPolicy
 from gateway.runner.agent_runner import AgentRunError, AgentRunner
 from gateway.session.manager import SessionManager
 from gateway.metrics import metrics_response, set_build_info, update_mcp_server_status
@@ -116,12 +117,19 @@ async def lifespan(app: FastAPI):
     llm_router = LLMRouter(config)
     agent_runner = AgentRunner(llm_router)
 
+    # Built once from config.yaml (loaded at startup only, no write API — see
+    # SPEC-gateway-tool-policy.md §2) and reused for the gateway's lifetime.
+    # None means "no tool_policy: block configured" — a zero-cost passthrough,
+    # not an empty ToolPolicy doing work on every call.
+    tool_policy = ToolPolicy(config.tool_policy) if config.tool_policy is not None else None
+
     _state["config"] = config
     _state["operator_token"] = operator_token
     _state["agents"] = agents
     _state["session_manager"] = session_manager
     _state["mcp_manager"] = mcp_manager
     _state["agent_runner"] = agent_runner
+    _state["tool_policy"] = tool_policy
     # Gates total concurrent agent runs gateway-wide — acquiring blocks (queues)
     # rather than rejecting once the gateway is at capacity.
     _state["run_semaphore"] = asyncio.Semaphore(config.limits.max_concurrent_runs)
@@ -362,6 +370,27 @@ async def mcp_tools():
     return manager.get_all_tools()
 
 
+@app.get("/tool-policy")
+async def tool_policy_config():
+    """Read-only view of the active tool_policy — no write endpoint exists;
+    policy is operator-owned via config.yaml and requires a restart to change."""
+    config: GatewayConfig = _state["config"]
+    if config.tool_policy is None:
+        return {"default": "allow", "rules": []}
+    return {
+        "default": config.tool_policy.default,
+        "rules": [
+            {
+                "index": i,
+                "action": "allow" if rule.allow is not None else "deny",
+                **(rule.allow or rule.deny).model_dump(),
+                "reason": rule.reason,
+            }
+            for i, rule in enumerate(config.tool_policy.rules)
+        ],
+    }
+
+
 @app.get("/mcp/servers")
 async def mcp_servers():
     manager: MCPManager = _state["mcp_manager"]
@@ -477,6 +506,7 @@ async def rpc(ws: WebSocket):
                 runner: AgentRunner = _state["agent_runner"]
                 mcp_manager: MCPManager = _state["mcp_manager"]
                 config: GatewayConfig = _state["config"]
+                tool_policy: ToolPolicy | None = _state["tool_policy"]
                 run_semaphore: asyncio.Semaphore = _state["run_semaphore"]
 
                 message_text = params.get("message", "")
@@ -505,6 +535,7 @@ async def rpc(ws: WebSocket):
                             thinking_level=thinking_level,
                             mcp_manager=mcp_manager,
                             limits=config.limits,
+                            tool_policy=tool_policy,
                             on_trace_event=_send_trace_event,
                             remote_context=remote_ctx,
                             trace_tool_result_max=trace_tool_result_max,

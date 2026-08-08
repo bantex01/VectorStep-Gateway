@@ -3,10 +3,13 @@ import asyncio
 
 import pytest
 
+from prometheus_client import REGISTRY
+
 from gateway.llm.providers.base import BaseProvider, ProviderError, ProviderResponse
 from gateway.mcp.manager import MCPTool, MCPToolResult
 from gateway.models.agent import AgentConfig
-from gateway.models.config import LimitsConfig
+from gateway.models.config import LimitsConfig, ToolPolicyConfig, ToolPolicyMatch, ToolPolicyRule
+from gateway.policy import ToolPolicy
 from gateway.runner.agent_runner import AgentRunError, AgentRunner, _dedupe_preserve_order
 
 
@@ -111,7 +114,10 @@ def _tool_response(tool_name="my__tool", tool_id="call_1", args=None):
     )
 
 
-async def _run(runner, agent, mcp=None, model_override=None, limits=None, trace_tool_result_max=None):
+async def _run(
+    runner, agent, mcp=None, model_override=None, limits=None,
+    trace_tool_result_max=None, tool_policy=None,
+):
     """Convenience wrapper: run and collect all trace events."""
     events = []
 
@@ -126,6 +132,7 @@ async def _run(runner, agent, mcp=None, model_override=None, limits=None, trace_
         thinking_level=None,
         mcp_manager=mcp or FakeMCPManager(),
         limits=limits or _limits(),
+        tool_policy=tool_policy,
         on_trace_event=on_event,
         trace_tool_result_max=trace_tool_result_max,
     )
@@ -492,6 +499,154 @@ class TestToolCalls:
         )
         assert result.text == "Azure done"
         assert result.tool_calls_made == 1
+
+
+# ---------------------------------------------------------------------------
+# Tool policy — runner integration (pure ToolPolicy logic is in
+# tests/unit/test_tool_policy.py; this covers the agent_runner.py seam)
+# ---------------------------------------------------------------------------
+
+
+def _deny_all_policy(reason="blocked by test policy") -> ToolPolicy:
+    return ToolPolicy(ToolPolicyConfig(rules=[
+        ToolPolicyRule(deny=ToolPolicyMatch(), reason=reason),
+    ]))
+
+
+class TestToolPolicy:
+    async def test_denied_call_returns_error_result_and_loop_continues(self):
+        provider = FakeProvider([
+            _tool_response("atlassian__jira_delete_issue", "call_1"),
+            _text_response("Reported that I couldn't do that"),
+        ])
+        runner = AgentRunner(FakeRouter(provider))
+        result, events = await _run(
+            runner, _agent(), mcp=FakeMCPManager(), tool_policy=_deny_all_policy("nope"),
+        )
+
+        assert result.text == "Reported that I couldn't do that"
+        assert result.iterations == 2  # LLM got the denial and kept going
+
+    async def test_denied_call_emits_tool_denied_trace_event(self):
+        provider = FakeProvider([
+            _tool_response("atlassian__jira_delete_issue", "call_1"),
+            _text_response("Done"),
+        ])
+        runner = AgentRunner(FakeRouter(provider))
+        _, events = await _run(
+            runner, _agent(), mcp=FakeMCPManager(), tool_policy=_deny_all_policy("destructive op"),
+        )
+
+        denied = [e for e in events if e["type"] == "tool_denied"]
+        assert len(denied) == 1
+        assert denied[0]["name"] == "atlassian__jira_delete_issue"
+        assert denied[0]["server"] == "atlassian"
+        assert denied[0]["reason"] == "destructive op"
+        assert denied[0]["rule_index"] == 0
+        # No normal tool_result event for a denied call — the loop never
+        # reaches mcp_manager.call_tool.
+        assert not [e for e in events if e["type"] == "tool_result"]
+
+    async def test_denied_call_never_reaches_mcp_manager(self):
+        call_log = []
+
+        class TrackingMCP(FakeMCPManager):
+            async def call_tool(self, name, arguments):
+                call_log.append(name)
+                return await super().call_tool(name, arguments)
+
+        provider = FakeProvider([
+            _tool_response("atlassian__jira_delete_issue", "call_1"),
+            _text_response("Done"),
+        ])
+        runner = AgentRunner(FakeRouter(provider))
+        await _run(runner, _agent(), mcp=TrackingMCP(), tool_policy=_deny_all_policy())
+
+        assert call_log == []
+
+    async def test_parallel_turn_one_denied_one_allowed(self):
+        call_log = []
+
+        class TrackingMCP(FakeMCPManager):
+            async def call_tool(self, name, arguments):
+                call_log.append(name)
+                return MCPToolResult(content=[{"type": "text", "text": f"{name}_ok"}], is_error=False)
+
+        two_tools_response = ProviderResponse(
+            content_blocks=[
+                {"type": "tool_use", "id": "c1", "name": "atlassian__jira_delete_issue", "input": {}},
+                {"type": "tool_use", "id": "c2", "name": "grafana__query", "input": {}},
+            ],
+            stop_reason="tool_use",
+            model_used="claude-sonnet-4-6",
+            usage={"input_tokens": 50, "output_tokens": 5},
+        )
+        provider = FakeProvider([two_tools_response, _text_response("Both handled")])
+        runner = AgentRunner(FakeRouter(provider))
+        policy = ToolPolicy(ToolPolicyConfig(rules=[
+            ToolPolicyRule(deny=ToolPolicyMatch(tool="jira_delete_issue"), reason="destructive"),
+        ]))
+        result, events = await _run(runner, _agent(), mcp=TrackingMCP(), tool_policy=policy)
+
+        assert result.tool_calls_made == 2
+        assert call_log == ["grafana__query"]  # only the allowed one actually dispatched
+        denied = [e for e in events if e["type"] == "tool_denied"]
+        assert [d["name"] for d in denied] == ["atlassian__jira_delete_issue"]
+
+    async def test_denial_increments_metric(self):
+        provider = FakeProvider([
+            _tool_response("atlassian__jira_delete_issue", "call_1"),
+            _text_response("Done"),
+        ])
+        runner = AgentRunner(FakeRouter(provider))
+        before = REGISTRY.get_sample_value(
+            "vectorstep_gateway_tool_denials_total",
+            {"mcp_server": "atlassian", "tool": "jira_delete_issue", "agent": "test-agent"},
+        ) or 0
+
+        await _run(runner, _agent(), mcp=FakeMCPManager(), tool_policy=_deny_all_policy())
+
+        after = REGISTRY.get_sample_value(
+            "vectorstep_gateway_tool_denials_total",
+            {"mcp_server": "atlassian", "tool": "jira_delete_issue", "agent": "test-agent"},
+        )
+        assert after == before + 1
+
+    async def test_no_policy_configured_is_unchanged_passthrough(self):
+        """Regression: tool_policy=None (the default) must behave exactly as
+        before this feature existed — no evaluation, no tool_denied events."""
+        provider = FakeProvider([
+            _tool_response("atlassian__jira_delete_issue", "call_1"),
+            _text_response("Deleted"),
+        ])
+        runner = AgentRunner(FakeRouter(provider))
+        result, events = await _run(runner, _agent(), mcp=FakeMCPManager())
+
+        assert result.text == "Deleted"
+        assert not [e for e in events if e["type"] == "tool_denied"]
+
+    async def test_default_deny_hides_categorically_blocked_tool_from_schema(self):
+        seen_tools = {}
+
+        class RecordingProvider(FakeProvider):
+            async def complete(self, system, messages, tools, model, max_tokens, thinking_level=None):
+                seen_tools["names"] = [t["name"] for t in (tools or [])]
+                return await super().complete(system, messages, tools, model, max_tokens, thinking_level)
+
+        tools = [
+            MCPTool(name="jira_search", registered_name="atlassian__jira_search",
+                    description="", input_schema={}, server_name="atlassian"),
+            MCPTool(name="jira_delete_issue", registered_name="atlassian__jira_delete_issue",
+                    description="", input_schema={}, server_name="atlassian"),
+        ]
+        provider = RecordingProvider([_text_response("no tools needed")])
+        runner = AgentRunner(FakeRouter(provider))
+        policy = ToolPolicy(ToolPolicyConfig(default="deny", rules=[
+            ToolPolicyRule(allow=ToolPolicyMatch(tool="jira_search")),
+        ]))
+        await _run(runner, _agent(), mcp=FakeMCPManager(tools=tools), tool_policy=policy)
+
+        assert seen_tools["names"] == ["atlassian__jira_search"]
 
 
 # ---------------------------------------------------------------------------
