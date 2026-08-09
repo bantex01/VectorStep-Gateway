@@ -163,7 +163,14 @@ def _resolve_env_vars(obj):
 
 
 def load_config(path: str = "config.yaml") -> GatewayConfig:
-    with open(path) as f:
-        raw = yaml.safe_load(f)
+    try:
+        with open(path) as f:
+            raw = yaml.safe_load(f)
+    except FileNotFoundError:
+        raise SystemExit(
+            f"Config file not found at '{path}' (set via the VECTORSTEP_GATEWAY_CONFIG "
+            "env var, default 'config.yaml'). Mount a config file at this path or "
+            "point VECTORSTEP_GATEWAY_CONFIG at one before starting the gateway."
+        )
     resolved = _resolve_env_vars(raw)
     return GatewayConfig(**resolved)

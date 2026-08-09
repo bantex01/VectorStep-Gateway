@@ -26,6 +26,12 @@ from gateway.session.manager import SessionManager
 from gateway.metrics import metrics_response, set_build_info, update_mcp_server_status
 from gateway.tracing import extract_remote_context, setup_tracing, shutdown_tracing
 
+# Container images set VECTORSTEP_VERSION at build time (see ../Dockerfile
+# and .github/workflows/image.yml) — a released image reports its tag, an
+# untagged local build reports "dev". Outside a container (bare checkout,
+# no env var set) this falls back to the last hardcoded release number.
+VERSION = os.environ.get("VECTORSTEP_VERSION") or "0.5.0"
+
 _state: dict = {}
 
 
@@ -110,7 +116,7 @@ async def lifespan(app: FastAPI):
 
     mcp_manager = MCPManager(config)
     await mcp_manager.start_all()
-    set_build_info(version="0.5.0")
+    set_build_info(version=VERSION)
     for name, status in mcp_manager.get_server_status().items():
         update_mcp_server_status(name, status["running"])
 
@@ -353,7 +359,7 @@ async def health():
 
     return {
         "status": "ok" if all_mcp_running else "degraded",
-        "version": "0.5.0",
+        "version": VERSION,
         "agents": len(agents),
         "active_runs": active_runs,
         "max_concurrent_runs": max_runs,

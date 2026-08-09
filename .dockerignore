@@ -1,0 +1,9 @@
+.git
+.venv
+**/__pycache__
+*.log
+logs/
+tests/
+.github/
+config.yaml
+agents/

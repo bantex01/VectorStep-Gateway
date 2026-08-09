@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vectorstep-gateway
+  labels:
+    app: vectorstep-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vectorstep-gateway
+  template:
+    metadata:
+      labels:
+        app: vectorstep-gateway
+    spec:
+      containers:
+        - name: vectorstep-gateway
+          # Pin to a specific released tag in production (see
+          # ../../../VectorStep/RELEASING.md); :edge tracks the default branch,
+          # :latest tracks the most recent release.
+          image: ghcr.io/bantex01/vectorstep-gateway:latest
+          ports:
+            - containerPort: 18780
+          envFrom:
+            # kubectl create secret generic vectorstep-gateway-secrets \
+            #   --from-literal=ANTHROPIC_API_KEY=... \
+            #   --from-literal=GRAFANA_TOKEN=...   # any MCP server env your config needs
+            # Feeds the ${VAR} placeholders in configmap.example.yaml — no secret
+            # values are ever baked into the ConfigMap or the image.
+            - secretRef:
+                name: vectorstep-gateway-secrets
+          volumeMounts:
+            - name: config
+              mountPath: /etc/vectorstep-gateway
+              readOnly: true
+            - name: data
+              mountPath: /data
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 18780
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 18780
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: config
+          configMap:
+            name: vectorstep-gateway-config   # from configmap.example.yaml — copy, edit, apply first
+        - name: data
+          persistentVolumeClaim:
+            claimName: vectorstep-gateway-data

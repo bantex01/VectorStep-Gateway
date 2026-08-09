@@ -1,0 +1,13 @@
+# The single /data volume — identity, agents, logs. Adjust storageClassName
+# and size for your cluster; 1Gi is a small-deployment starting point, not a
+# sizing recommendation.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vectorstep-gateway-data
+spec:
+  accessModes: [ReadWriteOnce]
+  # storageClassName: your-storage-class
+  resources:
+    requests:
+      storage: 1Gi

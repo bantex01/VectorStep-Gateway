@@ -1,0 +1,13 @@
+# ClusterIP — VectorStep reaches this Service in-cluster (see
+# ../../../VectorStep/deploy/k8s/configmap.example.yaml's executors.gateway.url).
+# Only change type: if you need the Gateway reachable from outside the cluster.
+apiVersion: v1
+kind: Service
+metadata:
+  name: vectorstep-gateway
+spec:
+  selector:
+    app: vectorstep-gateway
+  ports:
+    - port: 18780
+      targetPort: 18780

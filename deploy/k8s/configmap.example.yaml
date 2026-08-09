@@ -1,0 +1,35 @@
+# EXAMPLE — copy, edit, and apply as your own ConfigMap (or generate one from
+# your real config with `kubectl create configmap vectorstep-gateway-config
+# --from-file=config.yaml=./my-config.yaml`). Do not apply this file verbatim.
+#
+# This is the same "container paths" config described in
+# ../../samples/config.yaml.example — identity and agents live under /data,
+# which the Deployment mounts from the PVC in pvc.yaml. The identity path
+# override is not optional in a container: the default
+# ~/.vectorstep-gateway/identity is ephemeral per-pod.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vectorstep-gateway-config
+data:
+  config.yaml: |
+    server:
+      host: 0.0.0.0
+      port: 18780
+
+    agents_dir: /data/agents
+
+    identity:
+      path: /data/identity
+
+    logging:
+      dir: /data/logs
+
+    # No MCP servers by default — add the ones your deployment needs (see
+    # ../../samples/config.yaml.example). npx-based servers fetch on first
+    # startup unless preinstalled in a derived image; see ../../README.md.
+    mcp_servers: {}
+
+    providers:
+      anthropic:
+        api_key: ${ANTHROPIC_API_KEY}   # from the Secret via envFrom — see README.md

@@ -1,0 +1,30 @@
+[Unit]
+Description=VectorStep Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=vectorstep
+Group=vectorstep
+WorkingDirectory=/opt/vectorstep/vectorstep-gateway
+EnvironmentFile=/etc/vectorstep/vectorstep-gateway/env
+Environment=VECTORSTEP_GATEWAY_CONFIG=/etc/vectorstep/vectorstep-gateway/config.yaml
+ExecStart=/opt/vectorstep/vectorstep-gateway/.venv/bin/python -m gateway.main
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+
+# Hardening — keep, unless a documented feature breaks under it (then relax the
+# specific directive with a comment saying which feature needed it).
+# ProtectHome=true breaks the default ~/.vectorstep-gateway/identity path —
+# that's intentional: config.yaml must set identity.path explicitly to
+# /var/lib/vectorstep/vectorstep-gateway/identity (see install.md).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/vectorstep/vectorstep-gateway /var/log/vectorstep/vectorstep-gateway
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
