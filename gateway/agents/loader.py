@@ -5,7 +5,11 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 
-from gateway.llm.router import PREFIX_TO_PROVIDER
+from gateway.llm.router import (
+    PREFIX_TO_PROVIDER,
+    THINKING_CAPABLE_PROVIDERS,
+    provider_key_for_model_string,
+)
 from gateway.models.agent import AgentConfig
 from gateway.models.config import GatewayConfig
 
@@ -157,6 +161,36 @@ def validate_agent_models(agents: dict[str, AgentConfig], config: GatewayConfig)
                 logger.warning(msg)
                 results.append({"agent": agent_name, "field": "model", "value": model_string,
                                  "message": msg, "severity": "warning"})
+
+        # thinking_level is provider-agnostic config, but only some providers act
+        # on it. Warn ONCE here rather than leaving the per-call ignore-warning in
+        # the provider as the only signal — a 10-iteration agentic run would emit
+        # that ten times, and a cross-provider model_fallback makes an agent lose
+        # its extended thinking silently mid-run.
+        if agent.thinking_level and agent.thinking_level != "off":
+            deaf = [
+                model_string
+                for model_string in [agent.model, *agent.model_fallbacks]
+                if provider_key_for_model_string(model_string) not in THINKING_CAPABLE_PROVIDERS
+            ]
+            if deaf:
+                # The primary model being deaf means the agent never thinks at all;
+                # only-fallbacks-deaf means it stops thinking mid-run on failover.
+                primary_affected = agent.model in deaf
+                msg = (
+                    f"Agent '{agent_name}': thinking_level='{agent.thinking_level}' is ignored by"
+                    f" {', '.join(deaf)} — no reasoning parameter is wired up for"
+                    f" {'that provider' if len(deaf) == 1 else 'those providers'}, so this agent "
+                    + (
+                        "will never use extended thinking."
+                        if primary_affected
+                        else "silently loses extended thinking when it falls back."
+                    )
+                )
+                logger.warning(msg)
+                results.append({"agent": agent_name, "field": "thinking_level",
+                                 "value": agent.thinking_level, "message": msg,
+                                 "severity": "warning"})
 
         for server_name in agent.tool_scopes():
             if server_name not in mcp_server_names:

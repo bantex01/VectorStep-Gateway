@@ -82,6 +82,27 @@ class TestAgentConfig:
         agent = AgentConfig(name="a", model="anthropic/claude-sonnet-4-6", max_tokens=1024)
         assert agent.version == ""
 
+    def test_thinking_level_defaults_none(self):
+        agent = AgentConfig(name="a", model="anthropic/claude-sonnet-4-6", max_tokens=1024)
+        assert agent.thinking_level is None
+
+    def test_thinking_level_accepts_known_levels(self):
+        for level in ("off", "minimal", "low", "medium", "high", "xhigh"):
+            agent = AgentConfig(
+                name="a", model="anthropic/claude-sonnet-4-6", max_tokens=1024,
+                thinking_level=level,
+            )
+            assert agent.thinking_level == level
+
+    def test_thinking_level_rejects_unknown_value(self):
+        # A typo in agent.yaml must fail at load, not silently degrade to
+        # no-thinking inside the Anthropic provider's budget lookup.
+        with pytest.raises(ValidationError):
+            AgentConfig(
+                name="a", model="anthropic/claude-sonnet-4-6", max_tokens=1024,
+                thinking_level="highest",
+            )
+
 
 class TestComputeVersion:
     """See SPEC-prompt-versioning.md §3a — compute_version is the substrate VectorStep
@@ -111,6 +132,13 @@ class TestComputeVersion:
     def test_changes_when_tools_change(self):
         v1 = self._agent(tools=["grafana"]).compute_version()
         v2 = self._agent(tools=["grafana", "atlassian"]).compute_version()
+        assert v1 != v2
+
+    def test_changes_when_thinking_level_changes(self):
+        # thinking_level is behavioural, so it must be in the hash like every
+        # other field — the over-inclusive rule in compute_version's docstring.
+        v1 = self._agent().compute_version()
+        v2 = self._agent(thinking_level="high").compute_version()
         assert v1 != v2
 
     def test_ignores_version_field_itself(self):

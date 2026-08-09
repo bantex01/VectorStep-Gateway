@@ -31,6 +31,15 @@ PREFIX_TO_PROVIDER: dict[str, str] = {
 }
 
 
+# Provider keys whose complete() actually acts on thinking_level. Every other
+# provider logs a warning and ignores it (see each provider's complete()), so an
+# agent pinned to one of them never thinks no matter what agent.yaml says —
+# which is what validate_agent_models surfaces once at load time instead of on
+# every LLM call. Add a key here the moment that provider maps thinking_level to
+# its own reasoning parameter.
+THINKING_CAPABLE_PROVIDERS: frozenset[str] = frozenset({"anthropic"})
+
+
 def provider_key_for_model_string(model_string: str) -> str:
     """Return the provider key that get_provider_and_model would route to.
 

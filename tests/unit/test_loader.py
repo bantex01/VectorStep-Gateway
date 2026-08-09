@@ -40,13 +40,83 @@ def _make_config(anthropic_key="", openrouter_key="", ollama_cloud_key="", googl
     )
 
 
-def _make_agent(model, fallbacks=None):
+def _make_agent(model, fallbacks=None, thinking_level=None):
     return AgentConfig(
         name="test-agent",
         model=model,
         max_tokens=1024,
         model_fallbacks=fallbacks or [],
+        thinking_level=thinking_level,
     )
+
+
+class TestThinkingLevelValidation:
+    """thinking_level is provider-agnostic config that only some providers honour —
+    validate_agent_models says so once at load time instead of leaving the per-call
+    ignore-warning in the provider as the only signal."""
+
+    def _validate(self, agent, caplog):
+        # Every provider keyed here, so nothing but the thinking_level check can warn.
+        config = _make_config(anthropic_key="sk-ant-test", openrouter_key="sk-or-test",
+                              openai_key="sk-openai-test")
+        with caplog.at_level(logging.WARNING, logger="gateway.agents.loader"):
+            results = validate_agent_models({"triage": agent}, config)
+        return results, caplog.text
+
+    def test_anthropic_agent_no_warning(self, caplog):
+        agent = _make_agent("anthropic/claude-sonnet-4-6", thinking_level="high")
+        results, text = self._validate(agent, caplog)
+        assert text == ""
+        assert results == []
+
+    def test_unset_thinking_level_no_warning(self, caplog):
+        agent = _make_agent("openrouter/deepseek/deepseek-chat")
+        _, text = self._validate(agent, caplog)
+        assert text == ""
+
+    def test_off_is_not_warned_about(self, caplog):
+        # Explicitly disabling thinking on a provider that ignores it is not a
+        # misconfiguration — the outcome the operator asked for is what happens.
+        agent = _make_agent("openrouter/deepseek/deepseek-chat", thinking_level="off")
+        _, text = self._validate(agent, caplog)
+        assert text == ""
+
+    def test_primary_model_on_deaf_provider_warns(self, caplog):
+        agent = _make_agent("openrouter/deepseek/deepseek-chat", thinking_level="high")
+        results, text = self._validate(agent, caplog)
+        assert "never use extended thinking" in text
+        assert "openrouter/deepseek/deepseek-chat" in text
+        assert len(results) == 1
+        assert results[0]["field"] == "thinking_level"
+        assert results[0]["severity"] == "warning"
+
+    def test_deaf_fallback_only_warns_about_failover(self, caplog):
+        agent = _make_agent("anthropic/claude-sonnet-4-6", thinking_level="high",
+                            fallbacks=["openai/gpt-5"])
+        results, text = self._validate(agent, caplog)
+        assert "loses extended thinking when it falls back" in text
+        assert "openai/gpt-5" in text
+        assert "anthropic/claude-sonnet-4-6" not in text
+        assert len(results) == 1
+
+    def test_one_warning_per_agent_not_per_model(self, caplog):
+        agent = _make_agent("openrouter/a", thinking_level="high",
+                            fallbacks=["openai/gpt-5", "google/gemini"])
+        results, text = self._validate(agent, caplog)
+        # One entry naming all three, not one per deaf model. (google has no key in
+        # the fixture, so it also produces an unrelated api_key warning — hence
+        # filtering by field rather than counting every result.)
+        thinking = [r for r in results if r["field"] == "thinking_level"]
+        assert len(thinking) == 1
+        for model_string in ("openrouter/a", "openai/gpt-5", "google/gemini"):
+            assert model_string in thinking[0]["message"]
+
+    def test_severity_warning_never_blocks_a_write(self, caplog):
+        # agent_writer only hard-fails on "error" severity — a thinking_level
+        # mismatch must stay writable (the provider may gain support later).
+        agent = _make_agent("openrouter/a", thinking_level="high")
+        results, _ = self._validate(agent, caplog)
+        assert all(r["severity"] != "error" for r in results)
 
 
 class TestValidateAgentModels:

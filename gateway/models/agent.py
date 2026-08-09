@@ -1,7 +1,15 @@
 import hashlib
 import json
+from typing import Literal
 
 from pydantic import BaseModel
+
+# Reasoning effort an agent can default to. Values match the provider-facing
+# vocabulary the Anthropic provider maps to thinking budgets
+# (gateway/llm/providers/anthropic.py:_THINKING_BUDGET); "off" is the explicit
+# no-thinking value. Providers that have no equivalent knob log a warning and
+# ignore it, exactly as they already do for the per-request form.
+ThinkingLevel = Literal["off", "minimal", "low", "medium", "high", "xhigh"]
 
 
 def normalise_text(text: str) -> str:
@@ -20,6 +28,10 @@ class AgentConfig(BaseModel):
     # server — original behaviour) or a {server_name: [tool_name, ...]}
     # mapping to scope it down to specific tools.
     tools: list[str | dict[str, list[str]]] = []
+    # Default reasoning effort for this agent. A request-level `thinkingLevel`
+    # still wins when present, mirroring model/model_override precedence; None
+    # means "no agent default", which leaves behaviour exactly as before.
+    thinking_level: ThinkingLevel | None = None
     soul: str = ""  # loaded content of soul.md
     version: str = ""  # sha256[:12] over the whole config — set by _build_agent
 

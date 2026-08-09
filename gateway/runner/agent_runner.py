@@ -87,6 +87,11 @@ class AgentRunner:
         trace_tool_result_max = trace_tool_result_max or limits.trace_tool_result_max_chars
 
         model_string = model_override or agent.model
+        # Same precedence as model/model_override: the request wins when it
+        # specifies one, otherwise agent.yaml's default applies. Passing
+        # "off" per-request is therefore how a caller opts a high-effort agent
+        # out for one run.
+        thinking_level = thinking_level or agent.thinking_level
         # Models to try in order for this run: the requested one, then
         # agent.yaml's model_fallbacks. Once a candidate succeeds, later
         # iterations in this same run try it first (no flapping back to a

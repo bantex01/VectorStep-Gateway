@@ -1,6 +1,8 @@
 name: sre-triage
 model: anthropic/claude-sonnet-4-6    # model string — see Model Routing in README
 max_tokens: 8192
+# thinking_level: high   # optional default reasoning effort — off|minimal|low|medium|high|xhigh.
+                         # A step's executor_config.thinking_level overrides it per-request.
 tools:
   - grafana       # MCP server names from mcp_servers config — remove if not needed
   - atlassian

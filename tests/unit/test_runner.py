@@ -116,7 +116,7 @@ def _tool_response(tool_name="my__tool", tool_id="call_1", args=None):
 
 async def _run(
     runner, agent, mcp=None, model_override=None, limits=None,
-    trace_tool_result_max=None, tool_policy=None,
+    trace_tool_result_max=None, tool_policy=None, thinking_level=None,
 ):
     """Convenience wrapper: run and collect all trace events."""
     events = []
@@ -129,7 +129,7 @@ async def _run(
         session_key=f"agent:{agent.name}:test-run",
         message="test message",
         model_override=model_override,
-        thinking_level=None,
+        thinking_level=thinking_level,
         mcp_manager=mcp or FakeMCPManager(),
         limits=limits or _limits(),
         tool_policy=tool_policy,
@@ -259,6 +259,49 @@ class TestSimpleTextResponse:
         thinking_events = [e for e in events if e["type"] == "thinking"]
         assert len(thinking_events) == 1
         assert thinking_events[0]["content"] == "Let me think..."
+
+
+# ---------------------------------------------------------------------------
+# thinking_level precedence (agent default vs per-request)
+# ---------------------------------------------------------------------------
+
+
+class RecordingProvider(FakeProvider):
+    """FakeProvider that remembers the thinking_level it was called with."""
+
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.thinking_levels: list[str | None] = []
+
+    async def complete(self, system, messages, tools, model, max_tokens, thinking_level=None):
+        self.thinking_levels.append(thinking_level)
+        return await super().complete(system, messages, tools, model, max_tokens, thinking_level)
+
+
+class TestThinkingLevelPrecedence:
+    """Mirrors model/model_override: request wins, agent.yaml supplies the default."""
+
+    async def _levels_for(self, agent_level, request_level):
+        provider = RecordingProvider([_text_response()])
+        runner = AgentRunner(FakeRouter(provider))
+        agent = _agent()
+        agent.thinking_level = agent_level
+        await _run(runner, agent, thinking_level=request_level)
+        return provider.thinking_levels
+
+    async def test_agent_default_used_when_request_omits_one(self):
+        assert await self._levels_for("high", None) == ["high"]
+
+    async def test_request_overrides_agent_default(self):
+        assert await self._levels_for("low", "high") == ["high"]
+
+    async def test_request_off_overrides_agent_default(self):
+        # "off" is the documented per-run escape hatch for a high-effort agent.
+        assert await self._levels_for("high", "off") == ["off"]
+
+    async def test_none_when_neither_is_set(self):
+        # Pre-existing behaviour for every agent that doesn't set the field.
+        assert await self._levels_for(None, None) == [None]
 
 
 # ---------------------------------------------------------------------------
