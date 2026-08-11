@@ -1,13 +1,9 @@
 # Kubernetes manifests — VectorStep-Gateway
 
-> For the full path from a local change to a running cluster (build → tag →
-> GHCR → apply), see
-> [`../../../VectorStep/deploy/DEPLOYING.md`](../../../VectorStep/deploy/DEPLOYING.md).
-> This file assumes you already have images published and covers just the
-> `kubectl apply` step.
-
 Plain, copy-and-adapt YAML — the same spirit as `samples/`, not a generic
-chart. Apply in this order:
+chart. Assumes you already have images published to GHCR (see
+`../../../VectorStep/RELEASING.md` for how a tag becomes an image) — apply in
+this order:
 
 ```sh
 kubectl create secret generic vectorstep-gateway-secrets \
