@@ -40,11 +40,14 @@ limits:
                                       # override this per-request via traceToolResultMax.
 
 # MCP tool servers — each is spawned as a subprocess on gateway startup.
-# Remove servers you don't need. All env values support ${VAR_NAME} resolution.
-mcp_servers:
-  filesystem:
-    command: npx
-    args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+# Uncomment only what you need. All env values support ${VAR_NAME}
+# resolution. An MCP-server-less Gateway is a valid starting state — agents
+# with tools: [] don't need anything here (see Tutorials for adding a first
+# real tool server).
+# mcp_servers:
+  # filesystem:
+  #   command: npx
+  #   args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
 
   # grafana:
   #   command: npx
