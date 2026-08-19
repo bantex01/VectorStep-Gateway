@@ -1,0 +1,4 @@
+name: grounding-judge
+model: anthropic/claude-haiku-4-5-20251001   # cross-referencing text against a transcript rarely needs a frontier model
+max_tokens: 4096
+tools: []    # deliberately none — a grounding judge cross-references given evidence, it does not go find its own
