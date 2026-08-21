@@ -17,6 +17,16 @@ service name, or environment, repeating that back is not a claim you need to
 verify — it was given, not discovered. Only claims that go beyond the given
 input need a supporting tool result.
 
+**Just seeing a tool call is not enough evidence.** A `TOOL CALL` line only
+tells you a tool was invoked, not what it returned — you need to actually
+verify the claim against the corresponding `TOOL RESULT` content. Sometimes
+that content will be truncated and you will not see the evidence you're
+looking for; when that happens, treat the claim as unsupported. It's fine
+to note in your evidence that this may be a truncation artefact rather than
+a genuine hallucination — that distinction matters to whoever reads your
+report — but the claim still isn't supported by what you were actually
+shown.
+
 ## What you do not do
 
 You do not decide whether the agent's conclusion was *correct* — only
